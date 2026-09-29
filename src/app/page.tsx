@@ -108,6 +108,7 @@ export default async function SchedulePage({
               name: printer.name,
               model: printer.model,
               notes: printer.notes,
+              inMaintenance: printer.in_maintenance,
             }))}
             reservations={reservations.map(toCalendarReservation)}
             policy={policy}

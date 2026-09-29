@@ -33,7 +33,7 @@ export default async function MyPrintsPage() {
   const history = usageHistoryRange();
 
   const [printers, { data: rows }, { data: joinedRows }] = await Promise.all([
-    loadPrinters(supabase),
+    loadPrinters(supabase, { includeRetired: true }),
     supabase
       .from('reservations')
       .select('*')

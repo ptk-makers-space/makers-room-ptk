@@ -12,9 +12,8 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
 
   slotGranularityMinutes: 5,
   minReservationMinutes: 30,
-  // Time to clear the bed and set up: a print ending at 12:00 leaves the
-  // machine free from 12:05.
-  bufferMinutes: 5,
+  // Back-to-back bookings are allowed; admins may add a gap from the admin page.
+  bufferMinutes: 0,
 
   // Prints are never capped for length. Past this we suggest running overnight,
   // which is also free of the daytime quotas.
