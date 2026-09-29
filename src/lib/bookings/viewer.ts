@@ -22,6 +22,7 @@ export function buildViewerSummary(
     startsAt: new Date(row.starts_at),
     endsAt: new Date(row.ends_at),
     status: row.status,
+    priority: row.priority,
   }));
 
   const usage = computeUsage(usageReservations, {
@@ -44,11 +45,11 @@ export function buildViewerSummary(
     role: profile.role,
     monthlyBudgetLabel: `${formatMinutes(monthRemaining)} of daytime budget left`,
     quotaExplanation:
-      `Daytime prints this working week: ${usage.workingWeekReservations}/${policy.maxPrintsPerWorkingWeek} · ` +
-      `working hours used this month: ${formatMinutes(usage.monthWorkingMinutes)} of ${formatMinutes(
+      `Daytime fun prints this working week: ${usage.workingWeekReservations}/${policy.maxPrintsPerWorkingWeek} · ` +
+      `working hours used this month on fun prints: ${formatMinutes(usage.monthWorkingMinutes)} of ${formatMinutes(
         policy.monthlyWorkingMinutesCap,
       )} · open bookings: ${usage.activeReservations}/${policy.maxActiveReservations}. ` +
-      `Nights and weekends do not count, and any free slot inside ${policy.openBookingHours}h is always yours to take.`,
+      `Work and urgent prints are unlimited and never count towards these quotas. Nights and weekends do not count, and any free slot inside ${policy.openBookingHours}h is always yours to take.`,
   };
 }
 
