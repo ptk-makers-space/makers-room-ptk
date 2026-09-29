@@ -15,6 +15,7 @@ function res(overrides: Partial<UsageReservation> & { id: string }): UsageReserv
     startsAt: at(4, 10),
     endsAt: at(4, 13),
     status: 'scheduled',
+    priority: 'fun',
     ...overrides,
   };
 }
@@ -104,5 +105,43 @@ describe('computeUsage', () => {
       { ...base, slotStart: at(10, 10) },
     );
     expect(usage.monthWorkingMinutes).toBe(180);
+  });
+
+  it('does not charge work prints against the working-week quota', () => {
+    const usage = computeUsage(
+      [res({ id: 'work', priority: 'standard' })],
+      { ...base, slotStart: at(5, 10) },
+    );
+    expect(usage.workingWeekReservations).toBe(0);
+  });
+
+  it('does not charge urgent prints against the working-week quota', () => {
+    const usage = computeUsage(
+      [res({ id: 'urgent', priority: 'urgent' })],
+      { ...base, slotStart: at(5, 10) },
+    );
+    expect(usage.workingWeekReservations).toBe(0);
+  });
+
+  it('does not charge work or urgent prints against the monthly budget', () => {
+    const usage = computeUsage(
+      [
+        res({ id: 'work', priority: 'standard', startsAt: at(4, 9), endsAt: at(4, 12) }),
+        res({ id: 'urgent', priority: 'urgent', startsAt: at(9, 9), endsAt: at(9, 12) }),
+      ],
+      { ...base, slotStart: at(10, 10) },
+    );
+    expect(usage.monthWorkingMinutes).toBe(0);
+  });
+
+  it('still counts work and urgent prints as active reservations', () => {
+    const usage = computeUsage(
+      [
+        res({ id: 'work', priority: 'standard', startsAt: at(4, 10), endsAt: at(4, 13) }),
+        res({ id: 'urgent', priority: 'urgent', startsAt: at(5, 10), endsAt: at(5, 13) }),
+      ],
+      { ...base, slotStart: at(4, 10) },
+    );
+    expect(usage.activeReservations).toBe(2);
   });
 });

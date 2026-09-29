@@ -544,7 +544,7 @@ function Legend({ policy }: { policy: SchedulingPolicy }) {
       </span>
       <span className="flex items-center gap-1.5">
         <span className="h-3 w-3 rounded bg-white ring-1 ring-slate-300" />
-        Working hours · counts towards your quota
+        Working hours · counts towards your quota for fun prints only
       </span>
       <span className="flex items-center gap-1.5">
         <span className="h-3 w-3 rounded ring-2 ring-slate-900" />
