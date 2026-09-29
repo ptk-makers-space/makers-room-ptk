@@ -66,6 +66,7 @@ export type Database = {
           model: string | null;
           notes: string | null;
           is_active: boolean;
+          in_maintenance: boolean;
           sort_order: number;
           created_at: string;
         };
@@ -75,6 +76,7 @@ export type Database = {
           model?: string | null;
           notes?: string | null;
           is_active?: boolean;
+          in_maintenance?: boolean;
           sort_order?: number;
           created_at?: string;
         };
@@ -84,6 +86,7 @@ export type Database = {
           model?: string | null;
           notes?: string | null;
           is_active?: boolean;
+          in_maintenance?: boolean;
           sort_order?: number;
           created_at?: string;
         };

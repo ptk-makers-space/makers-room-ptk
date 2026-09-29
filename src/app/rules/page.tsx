@@ -1,8 +1,23 @@
 import Link from 'next/link';
 
+import { loadPolicy } from '@/lib/bookings/service';
 import { DEFAULT_POLICY } from '@/lib/scheduling';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { isSupabaseConfigured } from '@/lib/supabase/env';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata = { title: 'כללי ההזמנות · MakersRoom PTK' };
+
+/** Public page, so read the admin-tuned rules with the service client. */
+async function loadPublicPolicy() {
+  if (!isSupabaseConfigured()) return DEFAULT_POLICY;
+  try {
+    return await loadPolicy(createAdminClient());
+  } catch {
+    return DEFAULT_POLICY;
+  }
+}
 
 const DAY_NAMES_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
@@ -32,8 +47,8 @@ function formatMinutesHe(total: number): string {
  * Public explainer for the house rules. Kept readable without a session so a
  * prospective member can see how the queue works before signing in.
  */
-export default function RulesPage() {
-  const policy = DEFAULT_POLICY;
+export default async function RulesPage() {
+  const policy = await loadPublicPolicy();
   const workingDays = workingDaysLabel(policy.workingDays);
 
   return (
@@ -68,15 +83,24 @@ export default function RulesPage() {
         </p>
       </Rule>
 
-      <Rule title={`${policy.bufferMinutes} דקות ניקיון בין הדפסות`}>
-        <p>
-          בין שתי הדפסות על אותה מדפסת חייבות לעבור לפחות {policy.bufferMinutes} דקות,
-          כדי לפנות את המשטח ולהכין את ההדפסה הבאה. אם מישהו מזמין עד{' '}
-          <span dir="ltr">12:00</span>, ההזמנה הבאה יכולה להתחיל מ־
-          <span dir="ltr">12:05</span>. אפשר לבחור שעות בקפיצות של{' '}
-          {policy.slotGranularityMinutes} דקות.
-        </p>
-      </Rule>
+      {policy.bufferMinutes > 0 ? (
+        <Rule title={`${policy.bufferMinutes} דקות ניקיון בין הדפסות`}>
+          <p>
+            בין שתי הדפסות על אותה מדפסת חייבות לעבור לפחות {policy.bufferMinutes} דקות,
+            כדי לפנות את המשטח ולהכין את ההדפסה הבאה. אפשר לבחור שעות בקפיצות של{' '}
+            {policy.slotGranularityMinutes} דקות.
+          </p>
+        </Rule>
+      ) : (
+        <Rule title="אפשר להזמין צמוד להדפסה הקודמת">
+          <p>
+            אין זמן מעבר חובה בין הדפסות: אם מישהו מזמין עד{' '}
+            <span dir="ltr">12:00</span>, ההזמנה הבאה יכולה להתחיל ב־
+            <span dir="ltr">12:00</span> בדיוק. אפשר לבחור שעות בקפיצות של{' '}
+            {policy.slotGranularityMinutes} דקות.
+          </p>
+        </Rule>
+      )}
 
       <Rule title="הצטרפו אליי — הדפסה משותפת">
         <p>

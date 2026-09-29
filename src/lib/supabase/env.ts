@@ -30,6 +30,22 @@ export function getSupabaseServiceRoleKey(): string {
   return required('SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
+export function getCronSecret(): string {
+  return required('CRON_SECRET', process.env.CRON_SECRET);
+}
+
+export function getResendApiKey(): string {
+  return required('RESEND_API_KEY', process.env.RESEND_API_KEY);
+}
+
+export function getPrintReminderFrom(): string {
+  return required('PRINT_REMINDER_FROM', process.env.PRINT_REMINDER_FROM);
+}
+
+export function getPrintReminderTimeZone(): string {
+  return process.env.PRINT_REMINDER_TIME_ZONE?.trim() || 'Asia/Jerusalem';
+}
+
 /** True when the Supabase environment is fully configured. */
 export function isSupabaseConfigured(): boolean {
   return Boolean(

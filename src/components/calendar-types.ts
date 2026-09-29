@@ -33,6 +33,8 @@ export interface CalendarPrinter {
   name: string;
   model: string | null;
   notes: string | null;
+  /** Shown on the calendar but closed to new bookings. */
+  inMaintenance: boolean;
 }
 
 export interface ViewerSummary {

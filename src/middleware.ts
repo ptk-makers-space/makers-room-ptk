@@ -14,14 +14,17 @@ function isPublic(pathname: string): boolean {
 }
 
 /**
- * Refreshes the Supabase session cookie on every request and gates private
- * routes. Keeping this in middleware means Server Components always observe a
- * valid session.
+ * Refreshes the Supabase session cookie on private requests and gates private
+ * routes. Public routes avoid a network call so they remain available when
+ * Supabase is slow or temporarily unavailable.
  */
 export async function middleware(request: NextRequest) {
   // Without configuration there is nothing to authenticate against; let the
   // page render its own setup instructions instead of redirect-looping.
   if (!isSupabaseConfigured()) return NextResponse.next();
+
+  const { pathname } = request.nextUrl;
+  if (isPublic(pathname)) return NextResponse.next();
 
   let response = NextResponse.next({ request });
 
@@ -47,20 +50,11 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { pathname } = request.nextUrl;
-
-  if (!user && !isPublic(pathname)) {
+  if (!user) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = '/login';
     loginUrl.searchParams.set('next', pathname);
     return NextResponse.redirect(loginUrl);
-  }
-
-  if (user && pathname === '/login') {
-    const homeUrl = request.nextUrl.clone();
-    homeUrl.pathname = '/';
-    homeUrl.search = '';
-    return NextResponse.redirect(homeUrl);
   }
 
   return response;

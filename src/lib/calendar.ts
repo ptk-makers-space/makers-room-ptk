@@ -107,6 +107,12 @@ export function formatDayHeading(day: Date, timeZone: string): { weekday: string
   };
 }
 
+/** Minutes elapsed since local midnight for `date` in `timeZone` (0–1440). */
+export function minutesSinceMidnight(date: Date, timeZone: string): number {
+  const parts = getZonedParts(date, timeZone);
+  return parts.hour * 60 + parts.minute + parts.second / 60;
+}
+
 export function formatTime(date: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('en-GB', {
     hour: '2-digit',

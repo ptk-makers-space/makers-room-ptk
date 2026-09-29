@@ -49,14 +49,46 @@ export const policyInputSchema = z
     longPrintThresholdMinutes: z.number().int().min(30).max(24 * 60),
     overnightStartHour: z.number().int().min(0).max(23),
     overnightEndHour: z.number().int().min(0).max(23),
+    primeTimeStartHour: z.number().int().min(0).max(23),
+    primeTimeEndHour: z.number().int().min(1).max(24),
     openBookingHours: z.number().int().min(1).max(168),
     bufferMinutes: z.number().int().min(0).max(120),
     slotGranularityMinutes: z.number().int().min(1).max(60),
+    minReservationMinutes: z.number().int().min(5).max(24 * 60),
     maxPrintsPerWorkingWeek: z.number().int().min(0).max(20),
     monthlyWorkingMinutesCap: z.number().int().min(0).max(200 * 60),
     maxActiveReservations: z.number().int().min(1).max(50),
     workingDays: z.array(z.number().int().min(0).max(6)).max(7),
   })
   .partial();
+
+export type PolicyInput = z.infer<typeof policyInputSchema>;
+
+export const printerInputSchema = z.object({
+  name: z.string().trim().min(1, 'Give the printer a name.').max(40),
+  model: z.string().trim().max(80).nullable().optional(),
+  notes: z.string().trim().max(300).nullable().optional(),
+  sortOrder: z.number().int().min(0).max(999).optional(),
+  inMaintenance: z.boolean().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const printerUpdateSchema = printerInputSchema.partial();
+
+export type PrinterInput = z.infer<typeof printerInputSchema>;
+export type PrinterUpdate = z.infer<typeof printerUpdateSchema>;
+
+export const rescheduleInputSchema = z
+  .object({
+    printerId: z.string().uuid('Pick a printer.'),
+    startsAt: z.string().datetime({ offset: true }),
+    endsAt: z.string().datetime({ offset: true }),
+  })
+  .refine((value) => new Date(value.endsAt) > new Date(value.startsAt), {
+    message: 'The end time must be after the start time.',
+    path: ['endsAt'],
+  });
+
+export type RescheduleInput = z.infer<typeof rescheduleInputSchema>;
 
 export const DEFAULT_TIME_ZONE = DEFAULT_POLICY.timeZone;

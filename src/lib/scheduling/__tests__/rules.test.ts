@@ -87,6 +87,15 @@ function evaluate(
 
 const codes = (result: ReturnType<typeof evaluate>) => result.violations.map((v) => v.code);
 
+const GAP_POLICY = { ...DEFAULT_POLICY, bufferMinutes: 5 };
+
+function evaluateWithGap(
+  request: Partial<BookingRequest> = {},
+  context: Partial<BookingContext> = {},
+) {
+  return evaluate(request, { policy: GAP_POLICY, ...context });
+}
+
 describe('contact details', () => {
   it('allows a well-formed daytime booking', () => {
     const result = evaluate();
@@ -281,8 +290,22 @@ describe('printer isolation', () => {
 });
 
 describe('cleaning gap between prints', () => {
-  it('rejects a booking that starts the moment another ends', () => {
+  it('allows back-to-back bookings by default', () => {
     const result = evaluate(
+      {},
+      {
+        printerReservations: [
+          makeReservation({ startsAt: at(4, 7), endsAt: at(4, 10), title: 'Earlier' }),
+          makeReservation({ id: 'res-later', startsAt: at(4, 13), endsAt: at(4, 16) }),
+        ],
+      },
+    );
+    expect(codes(result)).not.toContain('buffer_gap');
+    expect(result.allowed).toBe(true);
+  });
+
+  it('rejects a booking that starts the moment another ends', () => {
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -294,7 +317,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('allows a booking that starts exactly one gap later', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -307,7 +330,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('rejects a booking that ends too close to the next print', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -319,7 +342,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('allows a booking that ends exactly one gap before the next print', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -331,7 +354,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('applies the gap to your own back-to-back prints', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -343,7 +366,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('needs no gap from a print on the other machine', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -355,7 +378,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('needs no gap from a cancelled print', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -367,7 +390,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('does not double-report a gap for a slot that is simply taken', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       {},
       {
         printerReservations: [
@@ -380,7 +403,7 @@ describe('cleaning gap between prints', () => {
   });
 
   it('asks for no gap from the print it is bumping', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       { priority: 'urgent', justification: 'Demo tomorrow' },
       {
         printerReservations: [
@@ -429,7 +452,7 @@ describe('the open 24h window', () => {
   });
 
   it('still enforces the cleaning gap inside the 24h window', () => {
-    const result = evaluate(
+    const result = evaluateWithGap(
       { startsAt: at(2, 19), endsAt: at(2, 22) },
       {
         printerReservations: [

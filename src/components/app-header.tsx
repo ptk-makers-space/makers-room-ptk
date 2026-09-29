@@ -7,7 +7,7 @@ export function AppHeader({
   active,
 }: {
   viewer: ViewerSummary;
-  active: 'schedule' | 'my-prints' | 'rules';
+  active: 'schedule' | 'my-prints' | 'rules' | 'admin';
 }) {
   const initials = viewer.name
     .split(' ')
@@ -36,6 +36,11 @@ export function AppHeader({
           <NavLink href="/rules" active={active === 'rules'}>
             Rules
           </NavLink>
+          {viewer.role === 'admin' ? (
+            <NavLink href="/admin" active={active === 'admin'}>
+              Admin
+            </NavLink>
+          ) : null}
         </nav>
 
         <div className="ml-auto flex items-center gap-3">

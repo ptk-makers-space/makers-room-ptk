@@ -39,7 +39,7 @@ function timeOptions(granularity: number): string[] {
 }
 
 /** Combine a `YYYY-MM-DD` key and `HH:MM` into an instant in the shop's timezone. */
-function toInstant(dateKey: string, time: string, timeZone: string): Date | null {
+export function toInstant(dateKey: string, time: string, timeZone: string): Date | null {
   const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
   const timeMatch = /^(\d{2}):(\d{2})$/.exec(time);
   if (!dateMatch || !timeMatch) return null;

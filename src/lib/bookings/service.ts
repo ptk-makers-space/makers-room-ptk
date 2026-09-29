@@ -65,12 +65,13 @@ export async function loadPolicy(client: Client): Promise<SchedulingPolicy> {
   return resolvePolicy((data?.policy ?? null) as Partial<SchedulingPolicy> | null);
 }
 
-export async function loadPrinters(client: Client): Promise<PrinterRow[]> {
-  const { data, error } = await client
-    .from('printers')
-    .select('*')
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true });
+export async function loadPrinters(
+  client: Client,
+  { includeRetired = false }: { includeRetired?: boolean } = {},
+): Promise<PrinterRow[]> {
+  let query = client.from('printers').select('*');
+  if (!includeRetired) query = query.eq('is_active', true);
+  const { data, error } = await query.order('sort_order', { ascending: true });
 
   if (error) throw new Error(`Could not load printers: ${error.message}`);
   return data ?? [];
@@ -147,7 +148,7 @@ export async function evaluateRequest(
   const endsAt = new Date(input.endsAt);
 
   // Anything that could overlap the requested slot on the chosen printer, plus
-  // the neighbours close enough to eat into the cleaning gap.
+  // any neighbours close enough to eat into an admin-configured gap.
   const bufferMs = policy.bufferMinutes * 60_000;
   const { data: conflictRows, error: conflictError } = await client
     .from('reservations')
@@ -208,6 +209,34 @@ export async function evaluateRequest(
     printerReservations: (conflictRows ?? []).map(toExisting),
   });
 
+  const { data: printer, error: printerError } = await client
+    .from('printers')
+    .select('is_active, in_maintenance')
+    .eq('id', input.printerId)
+    .maybeSingle();
+
+  if (printerError) {
+    throw new Error(`Could not load the printer: ${printerError.message}`);
+  }
+
+  if (!printer || !printer.is_active || printer.in_maintenance) {
+    return {
+      decision: {
+        ...decision,
+        allowed: false,
+        violations: [
+          {
+            code: 'printer_unavailable',
+            message: 'This printer is in maintenance and is not taking new bookings.',
+            severity: 'error',
+          },
+          ...decision.violations,
+        ],
+      },
+      policy,
+    };
+  }
+
   return { decision, policy };
 }
 
@@ -256,12 +285,15 @@ export async function createReservation(
     // Someone booked the same slot between validation and insert.
     const raced =
       error.code === '23P01' || error.message.includes('preemption_conflict');
+    const unavailable = error.message.includes('printer_unavailable');
     return {
       ok: false,
       decision,
       message: raced
-        ? 'Someone just booked this slot, or left too little cleaning time. Refresh the calendar and try again.'
-        : `Could not save the booking: ${error.message}`,
+        ? 'Someone just booked this slot. Refresh the calendar and try again.'
+        : unavailable
+          ? 'This printer is in maintenance and is not taking new bookings.'
+          : `Could not save the booking: ${error.message}`,
     };
   }
 
