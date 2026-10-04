@@ -31,7 +31,8 @@ the machines stay busy and no single person can monopolise them.
 | **Open bookings** | At most 5 upcoming bookings may be held at once, so nobody can claim a long row of slots in advance. There is no limit on how far ahead you may book. |
 | **Free slots open to everyone** | Within 24h of the start time every quota is waived — if a slot is still empty, anyone can take it. An idle printer helps nobody. |
 | **Contact details** | Every member has an email and a phone number on file, shown to signed-in members so a failed or bumped print can be chased up. |
-| **Email reminders** | Reservation owners and members who joined a print receive reminders 24 hours and 1 hour before it starts. |
+| **Email reminders** (optional) | Reservation owners and members who joined a print receive reminders 24 hours and 1 hour before it starts. Requires a Resend account with a verified sending domain; without one the cron simply logs failures and nothing else is affected. |
+| **Add to calendar** | Right after booking, and whenever a booking's time is changed, the app offers an `.ics` download (with a 1-hour alarm) for Google/Outlook/Apple Calendar. The same link is on every upcoming or joined print on *My prints*. Needs no email provider. |
 
 Every number above lives in `policy_settings` and can be tuned without a
 redeploy. The defaults are in

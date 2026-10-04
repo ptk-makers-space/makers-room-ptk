@@ -455,6 +455,7 @@ export function WeekCalendar({
             setSelected(null);
             router.refresh();
           }}
+          onRefresh={() => router.refresh()}
         />
       ) : null}
 
@@ -568,6 +569,7 @@ function ReservationSheet({
   onClose,
   onCancelled,
   onChanged,
+  onRefresh,
 }: {
   reservation: CalendarReservation;
   printerName: string;
@@ -577,11 +579,15 @@ function ReservationSheet({
   onClose: () => void;
   onCancelled: () => void;
   onChanged: () => void;
+  /** Re-fetch the schedule behind the sheet without closing it. */
+  onRefresh: () => void;
 }) {
   const timeZone = policy.timeZone;
   const [isCancelling, setIsCancelling] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  /** True after the time was changed, so we can nudge a calendar update. */
+  const [moved, setMoved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const canCancel =
@@ -598,6 +604,10 @@ function ReservationSheet({
   const canJoin =
     reservation.allowsJoiners &&
     reservation.userId !== viewer.id &&
+    (reservation.status === 'scheduled' || reservation.status === 'in_progress') &&
+    new Date(reservation.endsAt).getTime() > Date.now();
+  const canAddToCalendar =
+    (reservation.userId === viewer.id || hasJoined) &&
     (reservation.status === 'scheduled' || reservation.status === 'in_progress') &&
     new Date(reservation.endsAt).getTime() > Date.now();
 
@@ -712,12 +722,42 @@ function ReservationSheet({
             printers={printers}
             policy={policy}
             onCancel={() => setIsEditing(false)}
-            onSaved={onChanged}
+            onSaved={() => {
+              setIsEditing(false);
+              setMoved(true);
+              onRefresh();
+            }}
           />
         ) : null}
 
+        {moved ? (
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+            <p className="text-sm font-medium text-emerald-900">Time changed.</p>
+            <p className="mt-1 text-xs text-emerald-800">
+              If this print is already in a calendar, download the updated file and open it
+              — it replaces the old entry rather than adding a second one.
+            </p>
+            <a
+              href={`/api/reservations/${reservation.id}/ics`}
+              download
+              className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+            >
+              📅 Update my calendar
+            </a>
+          </div>
+        ) : null}
+
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          {canChangeTime && !isEditing ? (
+          {canAddToCalendar && !moved ? (
+            <a
+              href={`/api/reservations/${reservation.id}/ics`}
+              download
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              📅 Add to calendar
+            </a>
+          ) : null}
+          {canChangeTime && !isEditing && !moved ? (
             <button
               type="button"
               onClick={() => {
