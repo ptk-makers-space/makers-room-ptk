@@ -110,4 +110,10 @@ describe('icsFileName', () => {
   it('falls back when the title has no usable characters', () => {
     expect(icsFileName('!!!', event.startsAt)).toBe('print-booking-2026-03-04.ics');
   });
+
+  it('stays ASCII for non-Latin titles so the header is valid', () => {
+    const name = icsFileName('מחזיק למדף v2', event.startsAt);
+    expect(name).toBe('print-v2-2026-03-04.ics');
+    expect(name).toMatch(/^[\x20-\x7e]+$/);
+  });
 });

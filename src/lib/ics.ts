@@ -94,11 +94,16 @@ export function buildReservationIcs(event: ReservationCalendarEvent): string {
   return lines.map(foldIcsLine).join('\r\n') + '\r\n';
 }
 
-/** A safe, descriptive download name such as `print-benchy-2026-03-04.ics`. */
+/**
+ * A safe, descriptive download name such as `print-benchy-2026-03-04.ics`.
+ *
+ * ASCII only: this goes into an HTTP header, which rejects anything else
+ * (a Hebrew title would otherwise crash the response).
+ */
 export function icsFileName(title: string, startsAt: Date): string {
   const slug = title
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
   const day = startsAt.toISOString().slice(0, 10);
