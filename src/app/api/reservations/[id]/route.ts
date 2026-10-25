@@ -2,16 +2,20 @@ import { NextResponse } from 'next/server';
 
 import { isAdmin, rescheduleReservation } from '@/lib/admin/service';
 import { rescheduleInputSchema } from '@/lib/bookings/schemas';
-import { cancelReservation, getSessionContext } from '@/lib/bookings/service';
+import {
+  cancelReservation,
+  checkOwnReschedule,
+  getSessionContext,
+} from '@/lib/bookings/service';
 
-/** Admin only: move a booking to a different time or printer. */
+/** Move a booking. Owners go through the member rules; admins skip the quotas. */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await getSessionContext();
-  if (!isAdmin(session)) {
-    return NextResponse.json({ error: 'Only admins can move bookings.' }, { status: 403 });
+  if (!session) {
+    return NextResponse.json({ error: 'Not signed in.' }, { status: 401 });
   }
 
   const parsed = rescheduleInputSchema.safeParse(await request.json().catch(() => null));
@@ -23,6 +27,10 @@ export async function PATCH(
   }
 
   const { id } = await params;
+  if (!isAdmin(session)) {
+    const check = await checkOwnReschedule(session, id, parsed.data);
+    if (!check.ok) return NextResponse.json({ error: check.message }, { status: 400 });
+  }
   const result = await rescheduleReservation(session, id, parsed.data);
   if (!result.ok) return NextResponse.json({ error: result.message }, { status: 400 });
   return NextResponse.json({ ok: true });

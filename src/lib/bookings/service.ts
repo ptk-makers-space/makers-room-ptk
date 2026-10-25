@@ -23,7 +23,7 @@ import {
 } from '@/lib/scheduling';
 import type { UsageReservation } from '@/lib/scheduling/usage';
 
-import type { BookingInput } from './schemas';
+import type { BookingInput, RescheduleInput } from './schemas';
 
 type Client = SupabaseClient<Database>;
 
@@ -301,6 +301,91 @@ export async function createReservation(
   return { ok: true, reservation: data as unknown as ReservationRow, decision };
 }
 
+/**
+ * Check a member may move their own booking to the new slot. Unlike an admin
+ * move, the full rule set (quotas, gaps, suspension) applies, and the new slot
+ * must be free outright rather than bumping anyone. A print that has already
+ * started stays on its printer and may only start earlier and/or end later.
+ */
+export async function checkOwnReschedule(
+  session: SessionContext,
+  reservationId: string,
+  input: RescheduleInput,
+  now: Date = new Date(),
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const admin = createAdminClient();
+
+  const { data: existing, error: loadError } = await admin
+    .from('reservations')
+    .select(
+      'id, user_id, status, printer_id, starts_at, ends_at, title, notes, priority, justification, allows_joiners',
+    )
+    .eq('id', reservationId)
+    .maybeSingle();
+
+  if (loadError) return { ok: false, message: loadError.message };
+  if (!existing) return { ok: false, message: 'That booking no longer exists.' };
+  if (existing.user_id !== session.userId) {
+    return { ok: false, message: 'You can only change your own bookings.' };
+  }
+  if (existing.status !== 'scheduled' && existing.status !== 'in_progress') {
+    return { ok: false, message: 'Only upcoming or running prints can be changed.' };
+  }
+
+  const hasStarted =
+    existing.status === 'in_progress' || new Date(existing.starts_at).getTime() <= now.getTime();
+  if (hasStarted) {
+    if (new Date(existing.ends_at).getTime() <= now.getTime()) {
+      return { ok: false, message: 'This print has already finished.' };
+    }
+    if (input.printerId !== existing.printer_id) {
+      return { ok: false, message: 'A print that has started cannot move to another printer.' };
+    }
+    if (new Date(input.startsAt).getTime() > new Date(existing.starts_at).getTime()) {
+      return {
+        ok: false,
+        message: 'A print that has started can only be moved to start earlier, not later.',
+      };
+    }
+    if (new Date(input.endsAt).getTime() < new Date(existing.ends_at).getTime()) {
+      return {
+        ok: false,
+        message: 'A print that has started can only be extended, not shortened.',
+      };
+    }
+  }
+
+  const userClient = await createClient();
+  const { decision } = await evaluateRequest(
+    userClient,
+    session,
+    {
+      printerId: input.printerId,
+      title: existing.title,
+      notes: existing.notes,
+      priority: existing.priority,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      justification: existing.justification,
+      allowsJoiners: existing.allows_joiners,
+      reservationId,
+    },
+    now,
+  );
+
+  // A running print's start is already in the past by definition.
+  const violations = decision.violations.filter(
+    (violation) => !(hasStarted && violation.code === 'in_the_past'),
+  );
+  if (violations.length > 0) {
+    return { ok: false, message: violations[0].message };
+  }
+  if (decision.preemptions.length > 0) {
+    return { ok: false, message: 'That slot is already booked. Pick a free time.' };
+  }
+  return { ok: true };
+}
+
 /** Cancel a booking. Members may cancel their own; admins may cancel any. */
 export async function cancelReservation(
   session: SessionContext,
@@ -355,6 +440,10 @@ export async function joinReservation(
   reservationId: string,
   now: Date = new Date(),
 ): Promise<{ ok: boolean; message?: string }> {
+  if (session.profile.is_blocked) {
+    return { ok: false, message: 'Your account is suspended. Contact a makerspace admin.' };
+  }
+
   const admin = createAdminClient();
 
   const { data: existing, error: loadError } = await admin

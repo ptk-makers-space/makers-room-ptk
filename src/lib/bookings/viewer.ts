@@ -43,6 +43,7 @@ export function buildViewerSummary(
     email: profile.email,
     phone: profile.phone,
     role: profile.role,
+    isBlocked: profile.is_blocked,
     monthlyBudgetLabel: `${formatMinutes(monthRemaining)} of daytime budget left`,
     quotaExplanation:
       `Daytime fun prints this working week: ${usage.workingWeekReservations}/${policy.maxPrintsPerWorkingWeek} · ` +

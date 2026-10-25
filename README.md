@@ -124,14 +124,17 @@ Sign-up is deliberately **open**: anyone who reaches the URL and has a Google
 account can join and book. For a small makerspace that beats maintaining an
 invite list, and it matches how the room already works.
 
-The lever for abuse is reactive rather than preventative. To suspend someone:
+The lever for abuse is reactive rather than preventative. Admins can ban a
+member from the **Members** section of the Admin page; this also cancels their
+upcoming prints. The equivalent SQL is:
 
 ```sql
 update public.profiles set is_blocked = true where email = 'them@example.com';
 ```
 
-A blocked member can still sign in and read the calendar, but every booking is
-refused with a clear message. Reverse it by setting the flag back to `false`.
+A banned member can still sign in and read the calendar, but booking, moving and
+joining prints are refused, and a banner tells them to contact an admin. Lift
+the ban from the same Admin section (or set the flag back to `false`).
 
 If the workshop outgrows this, the natural next steps are restricting sign-in to
 one email domain, or adding an `approved` flag that an admin flips before a
