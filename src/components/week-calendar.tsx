@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import {
+  addWeeks,
   buildWeekDays,
   formatDayHeading,
   formatTime,
@@ -161,7 +162,7 @@ export function WeekCalendar({
   }
 
   function goToWeek(offset: number) {
-    const target = new Date(weekDays[0].getTime() + offset * 7 * 24 * 60 * 60 * 1000);
+    const target = addWeeks(weekDays[0], offset, policy.timeZone);
     const params = new URLSearchParams();
     params.set('week', toDateKey(target, policy.timeZone));
     router.push(`/?${params.toString()}`);
@@ -588,8 +589,11 @@ function ReservationSheet({
     reservation.status === 'scheduled' &&
     (reservation.userId === viewer.id || viewer.role === 'admin');
   const canChangeTime =
-    viewer.role === 'admin' &&
-    (reservation.status === 'scheduled' || reservation.status === 'in_progress');
+    viewer.role === 'admin'
+      ? reservation.status === 'scheduled' || reservation.status === 'in_progress'
+      : reservation.userId === viewer.id &&
+        (reservation.status === 'scheduled' || reservation.status === 'in_progress') &&
+        new Date(reservation.endsAt).getTime() > Date.now();
   const style = PRIORITY_STYLES[reservation.priority];
 
   const hasJoined = reservation.participants.some(
@@ -711,6 +715,7 @@ function ReservationSheet({
             reservation={reservation}
             printers={printers}
             policy={policy}
+            isAdminChange={viewer.role === 'admin'}
             onCancel={() => setIsEditing(false)}
             onSaved={onChanged}
           />
@@ -781,17 +786,19 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-/** Admin-only: move a booking to another time or printer, bypassing member quotas. */
+/** Move a booking to another time or printer. Admins bypass member quotas. */
 function ChangeTimeForm({
   reservation,
   printers,
   policy,
+  isAdminChange,
   onCancel,
   onSaved,
 }: {
   reservation: CalendarReservation;
   printers: CalendarPrinter[];
   policy: SchedulingPolicy;
+  isAdminChange: boolean;
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -810,6 +817,9 @@ function ChangeTimeForm({
   const choices = printers.filter(
     (printer) => !printer.inMaintenance || printer.id === reservation.printerId,
   );
+  const isRunning =
+    !isAdminChange &&
+    (reservation.status === 'in_progress' || start.getTime() <= Date.now());
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -856,7 +866,11 @@ function ChangeTimeForm({
   return (
     <form onSubmit={save} className="mt-4 space-y-3 rounded-lg border border-slate-200 p-3">
       <p className="text-xs text-slate-500">
-        Admin change — quotas are skipped, but the slot must be free
+        {isAdminChange
+          ? 'Admin change — quotas are skipped, but the slot must be free'
+          : isRunning
+            ? 'This print has started: you can start it earlier or let it run longer on the same printer, as long as the time is free'
+            : 'The usual booking rules apply, and the new slot must be free'}
         {policy.bufferMinutes > 0
           ? `, including the ${policy.bufferMinutes}-minute cleaning gap`
           : ''}
@@ -866,6 +880,7 @@ function ChangeTimeForm({
         <span className="mb-1 block text-xs font-medium text-slate-600">Printer</span>
         <select
           value={printerId}
+          disabled={isRunning}
           onChange={(event) => setPrinterId(event.target.value)}
           className={inputClass}
         >

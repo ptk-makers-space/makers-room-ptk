@@ -67,6 +67,12 @@ export function AppHeader({
           </form>
         </div>
       </div>
+      {viewer.isBlocked ? (
+        <p role="alert" className="bg-rose-50 px-4 py-2 text-center text-sm text-rose-700">
+          Your account is suspended, so you cannot book, move or join prints. Contact a
+          makerspace admin to have the ban lifted.
+        </p>
+      ) : null}
     </header>
   );
 }

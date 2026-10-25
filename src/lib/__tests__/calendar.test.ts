@@ -89,6 +89,20 @@ describe('splitIntoDaySegments', () => {
     expect(segments[0].isStart).toBe(false);
   });
 
+  it('places blocks by wall-clock time on the autumn DST day', () => {
+    // Israel falls back on 2026-10-25, making it a 25-hour day.
+    const oct = (hour: number) => zonedWallTimeToDate(2026, 10, 25, hour, 0, TZ);
+    const segments = splitIntoDaySegments(
+      [{ start: oct(8), end: oct(10) }],
+      buildWeekDays(oct(12), TZ),
+      range,
+      TZ,
+    );
+    expect(segments).toHaveLength(1);
+    expect(segments[0].startMinutes).toBe(480);
+    expect(segments[0].endMinutes).toBe(600);
+  });
+
   it('ignores prints outside the week', () => {
     const segments = splitIntoDaySegments(
       [{ start: at(20, 10), end: at(20, 12) }],

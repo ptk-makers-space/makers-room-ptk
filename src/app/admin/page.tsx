@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 
+import { MemberManager } from '@/components/admin/member-manager';
 import { PolicyForm } from '@/components/admin/policy-form';
 import { PrinterManager } from '@/components/admin/printer-manager';
 import { AppHeader } from '@/components/app-header';
@@ -23,7 +24,7 @@ export default async function AdminPage() {
   const supabase = await createClient();
   const history = usageHistoryRange();
 
-  const [policy, printers, { data: myReservations }] = await Promise.all([
+  const [policy, printers, { data: myReservations }, { data: members }] = await Promise.all([
     loadPolicy(supabase),
     loadPrinters(supabase, { includeRetired: true }),
     supabase
@@ -32,6 +33,10 @@ export default async function AdminPage() {
       .eq('user_id', session.userId)
       .gte('starts_at', history.from.toISOString())
       .lte('starts_at', history.to.toISOString()),
+    supabase
+      .from('profiles')
+      .select('id, full_name, email, role, is_blocked')
+      .order('full_name', { ascending: true }),
   ]);
 
   const viewer = buildViewerSummary(session.profile, myReservations ?? [], policy);
@@ -59,6 +64,24 @@ export default async function AdminPage() {
               sortOrder: printer.sort_order,
               inMaintenance: printer.in_maintenance,
               isActive: printer.is_active,
+            }))}
+          />
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="mb-1 text-base font-semibold text-slate-900">Members</h2>
+          <p className="mb-4 text-sm text-slate-500">
+            Banned members can still sign in and view the schedule, but cannot book, move or
+            join prints until an admin lifts the ban.
+          </p>
+          <MemberManager
+            currentUserId={session.userId}
+            members={(members ?? []).map((member) => ({
+              id: member.id,
+              name: member.full_name || member.email || 'Member',
+              email: member.email,
+              role: member.role,
+              isBlocked: member.is_blocked,
             }))}
           />
         </section>

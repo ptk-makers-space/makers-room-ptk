@@ -79,11 +79,22 @@ export function splitIntoDaySegments<T>(
       const clippedStart = Math.max(range.start.getTime(), dayStart.getTime());
       const clippedEnd = Math.min(range.end.getTime(), dayEnd.getTime());
 
+      // Wall-clock minutes, not elapsed: DST days are 23h/25h but the grid is always 24 rows.
+      const startMinutes =
+        clippedStart === dayStart.getTime()
+          ? 0
+          : minutesSinceMidnight(new Date(clippedStart), timeZone);
+      const endMinutes =
+        clippedEnd === dayEnd.getTime()
+          ? DAY_MINUTES
+          : minutesSinceMidnight(new Date(clippedEnd), timeZone);
+
       segments.push({
         item,
         dayIndex,
-        startMinutes: (clippedStart - dayStart.getTime()) / 60_000,
-        endMinutes: (clippedEnd - dayStart.getTime()) / 60_000,
+        startMinutes,
+        // The repeated fall-back hour can make wall-clock end precede start.
+        endMinutes: Math.max(endMinutes, startMinutes),
         isStart: clippedStart === range.start.getTime(),
         isEnd: clippedEnd === range.end.getTime(),
       });

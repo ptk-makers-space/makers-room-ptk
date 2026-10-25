@@ -43,6 +43,7 @@ export interface ViewerSummary {
   email: string;
   phone: string | null;
   role: 'member' | 'admin';
+  isBlocked: boolean;
   /** Short badge text, e.g. "6h 30m of daytime budget left". */
   monthlyBudgetLabel: string;
   /** Full quota breakdown shown as a tooltip and on the summary pages. */

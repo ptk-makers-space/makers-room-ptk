@@ -112,6 +112,64 @@ export async function updatePrinter(
 }
 
 /**
+ * Ban or unban a member. A banned member can still sign in and read the
+ * calendar but cannot book, move or join prints until an admin lifts the ban.
+ * Banning also cancels their upcoming prints so the slots free up.
+ */
+export async function setMemberBlocked(
+  session: SessionContext,
+  memberId: string,
+  isBlocked: boolean,
+): Promise<Result<{ cancelled: number }>> {
+  if (memberId === session.userId) {
+    return { ok: false, message: 'You cannot ban yourself.' };
+  }
+
+  const admin = createAdminClient();
+
+  const { data: member, error: loadError } = await admin
+    .from('profiles')
+    .select('id, role')
+    .eq('id', memberId)
+    .maybeSingle();
+  if (loadError) return { ok: false, message: loadError.message };
+  if (!member) return { ok: false, message: 'That member no longer exists.' };
+  if (isBlocked && member.role === 'admin') {
+    return { ok: false, message: 'Admins cannot be banned. Remove their admin role first.' };
+  }
+
+  const { error } = await admin
+    .from('profiles')
+    .update({ is_blocked: isBlocked })
+    .eq('id', memberId);
+  if (error) return { ok: false, message: error.message };
+
+  if (!isBlocked) return { ok: true, data: { cancelled: 0 } };
+
+  const { data: cancelled, error: cancelError } = await admin
+    .from('reservations')
+    .update({ status: 'cancelled' })
+    .eq('user_id', memberId)
+    .eq('status', 'scheduled')
+    .gt('starts_at', new Date().toISOString())
+    .select('id');
+  if (cancelError) return { ok: false, message: cancelError.message };
+
+  if (cancelled && cancelled.length > 0) {
+    await admin.from('reservation_events').insert(
+      cancelled.map((row) => ({
+        reservation_id: row.id,
+        actor_id: session.userId,
+        event_type: 'cancelled',
+        payload: { by_admin: true, reason: 'member_banned' },
+      })),
+    );
+  }
+
+  return { ok: true, data: { cancelled: cancelled?.length ?? 0 } };
+}
+
+/**
  * Move a booking to another time or printer. Admins bypass the member quotas,
  * but never double-booking or the configured gap between prints.
  */
