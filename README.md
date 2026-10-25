@@ -8,7 +8,7 @@ the machines stay busy and no single person can monopolise them.
 
 - **Stack:** Next.js 15 (App Router) · TypeScript · Tailwind v4 · Supabase (Postgres + Auth) · Vercel
 - **Auth:** Google OAuth via Supabase
-- **Tests:** Vitest — 75 unit tests covering the scheduling rules
+- **Tests:** Vitest — 84 unit tests covering the scheduling rules
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) — forks and pull requests welcome
 - **Licence:** [MIT](LICENSE)
 
@@ -25,12 +25,14 @@ the machines stay busy and no single person can monopolise them.
 | **Long prints: a suggestion, not a rule** | Prints over 5h get a nudge to start in the overnight window (17:00–08:00). Nothing blocks a long daytime print, but night hours cost no quota, so moving it there keeps your working-week print free for something else. |
 | **Urgent work beats fun prints** | Bookings are `fun`, `standard` (work) or `urgent`. An urgent job takes over a slot held by a *fun* print, and the owner's email and phone are surfaced so they can be told. Urgent never bumps other work, and never bumps a print that has already started. |
 | **Urgent is unlimited** | There is no cap on urgent bookings. The only requirement is a one-line reason, so whoever gets bumped understands why. |
-| **One daytime print per working week** | Only one print may start during working hours (08:00–17:00, Sun–Thu) in any calendar week. Nights and weekends do not count, so long jobs are pushed to the cheap capacity. |
-| **10 working hours per month** | A member may spend at most 10h of working-hours machine time per calendar month. Only the part of a print that runs 08:00–17:00 on Sun–Thu is charged, so overnight and weekend prints are free. |
+| **Work and urgent are unlimited** | Only `fun` prints are rationed by the working-week and monthly quotas below. `standard` (work) and `urgent` prints never count against those quotas and are never blocked by them. |
+| **One daytime print per working week** | Only one *fun* print may start during working hours (08:00–17:00, Sun–Thu) in any calendar week. Nights and weekends do not count, so long jobs are pushed to the cheap capacity. |
+| **10 working hours per month** | A member may spend at most 10h of working-hours machine time per calendar month on *fun* prints. Only the part of a print that runs 08:00–17:00 on Sun–Thu is charged, so overnight and weekend prints are free. |
 | **Open bookings** | At most 5 upcoming bookings may be held at once, so nobody can claim a long row of slots in advance. There is no limit on how far ahead you may book. |
 | **Free slots open to everyone** | Within 24h of the start time every quota is waived — if a slot is still empty, anyone can take it. An idle printer helps nobody. |
 | **Contact details** | Every member has an email and a phone number on file, shown to signed-in members so a failed or bumped print can be chased up. |
-| **Email reminders** | Reservation owners and members who joined a print receive reminders 24 hours and 1 hour before it starts. |
+| **Email reminders** (optional) | Reservation owners and members who joined a print receive reminders 24 hours and 1 hour before it starts. Requires a Resend account with a verified sending domain; without one the cron simply logs failures and nothing else is affected. |
+| **Add to calendar** | Right after booking, and whenever a booking's time is changed, the app offers an `.ics` download (with a 1-hour alarm) for Google/Outlook/Apple Calendar. The same link is on every upcoming or joined print on *My prints*. Needs no email provider. |
 
 Every number above lives in `policy_settings` and can be tuned without a
 redeploy. The defaults are in

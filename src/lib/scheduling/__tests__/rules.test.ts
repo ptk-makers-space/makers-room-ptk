@@ -497,19 +497,41 @@ describe('volume quotas', () => {
  */
 describe('working-week and monthly budgets', () => {
   it('allows the first daytime print of the working week', () => {
-    const result = evaluate({}, { usage: makeUsage({ workingWeekReservations: 0 }) });
+    const result = evaluate(
+      { priority: 'fun' },
+      { usage: makeUsage({ workingWeekReservations: 0 }) },
+    );
     expect(codes(result)).not.toContain('working_week_print_cap');
     expect(result.allowed).toBe(true);
   });
 
   it('rejects a second daytime print in the same working week', () => {
-    const result = evaluate({}, { usage: makeUsage({ workingWeekReservations: 1 }) });
+    const result = evaluate(
+      { priority: 'fun' },
+      { usage: makeUsage({ workingWeekReservations: 1 }) },
+    );
     expect(codes(result)).toContain('working_week_print_cap');
+  });
+
+  it('does not limit work or urgent prints against the working-week cap', () => {
+    const workResult = evaluate(
+      { priority: 'standard' },
+      { usage: makeUsage({ workingWeekReservations: 5 }) },
+    );
+    expect(codes(workResult)).not.toContain('working_week_print_cap');
+    expect(workResult.allowed).toBe(true);
+
+    const urgentResult = evaluate(
+      { priority: 'urgent', justification: 'Deadline' },
+      { usage: makeUsage({ workingWeekReservations: 5 }) },
+    );
+    expect(codes(urgentResult)).not.toContain('working_week_print_cap');
+    expect(urgentResult.allowed).toBe(true);
   });
 
   it('does not count a night print against the working-week limit', () => {
     const result = evaluate(
-      { startsAt: at(4, 20), endsAt: at(5, 6) },
+      { priority: 'fun', startsAt: at(4, 20), endsAt: at(5, 6) },
       { usage: makeUsage({ workingWeekReservations: 1 }) },
     );
     expect(result.classification.isWorkingDaytime).toBe(false);
@@ -519,7 +541,7 @@ describe('working-week and monthly budgets', () => {
 
   it('does not count a weekend print against the working-week limit', () => {
     const result = evaluate(
-      { startsAt: at(6, 10), endsAt: at(6, 13) },
+      { priority: 'fun', startsAt: at(6, 10), endsAt: at(6, 13) },
       { usage: makeUsage({ workingWeekReservations: 1 }) },
     );
     expect(result.classification.isWorkingDaytime).toBe(false);
@@ -529,7 +551,7 @@ describe('working-week and monthly budgets', () => {
 
   it('enforces the monthly working-hours cap', () => {
     const result = evaluate(
-      {},
+      { priority: 'fun' },
       {
         usage: makeUsage({
           monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap - 60,
@@ -539,9 +561,33 @@ describe('working-week and monthly budgets', () => {
     expect(codes(result)).toContain('monthly_cap');
   });
 
+  it('does not limit work or urgent prints against the monthly cap', () => {
+    const workResult = evaluate(
+      { priority: 'standard' },
+      {
+        usage: makeUsage({
+          monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap,
+        }),
+      },
+    );
+    expect(codes(workResult)).not.toContain('monthly_cap');
+    expect(workResult.allowed).toBe(true);
+
+    const urgentResult = evaluate(
+      { priority: 'urgent', justification: 'Deadline' },
+      {
+        usage: makeUsage({
+          monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap,
+        }),
+      },
+    );
+    expect(codes(urgentResult)).not.toContain('monthly_cap');
+    expect(urgentResult.allowed).toBe(true);
+  });
+
   it('allows a daytime print that exactly fills the monthly budget', () => {
     const result = evaluate(
-      {},
+      { priority: 'fun' },
       {
         usage: makeUsage({
           monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap - 180,
@@ -555,7 +601,7 @@ describe('working-week and monthly budgets', () => {
   it('charges only the daytime part of a print to the monthly budget', () => {
     const result = evaluate(
       // 15:00 -> 08:00 next day: only 15:00-17:00 is working-hours time.
-      { startsAt: at(4, 15), endsAt: at(5, 8) },
+      { priority: 'fun', startsAt: at(4, 15), endsAt: at(5, 8) },
       {
         usage: makeUsage({
           monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap - 180,
@@ -568,7 +614,7 @@ describe('working-week and monthly budgets', () => {
 
   it('ignores a fully overnight print for the monthly budget', () => {
     const result = evaluate(
-      { startsAt: at(4, 20), endsAt: at(5, 6) },
+      { priority: 'fun', startsAt: at(4, 20), endsAt: at(5, 6) },
       {
         usage: makeUsage({
           monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap,
@@ -582,7 +628,7 @@ describe('working-week and monthly budgets', () => {
 
   it('waives both budgets inside the open window', () => {
     const result = evaluate(
-      { startsAt: at(3, 9), endsAt: at(3, 12) },
+      { priority: 'fun', startsAt: at(3, 9), endsAt: at(3, 12) },
       {
         usage: makeUsage({
           workingWeekReservations: 5,

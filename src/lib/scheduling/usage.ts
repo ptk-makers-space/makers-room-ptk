@@ -6,7 +6,7 @@ import {
   zonedStartOfWeek,
 } from './time';
 
-import type { ReservationStatus, SchedulingPolicy, UserUsage } from './types';
+import type { PrintPriority, ReservationStatus, SchedulingPolicy, UserUsage } from './types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
@@ -17,6 +17,7 @@ export interface UsageReservation {
   startsAt: Date;
   endsAt: Date;
   status: ReservationStatus;
+  priority: PrintPriority;
 }
 
 /** Statuses that count towards a member's usage. */
@@ -109,13 +110,17 @@ export function computeUsage(
     (r) => counts(r) && r.id !== excludeReservationId,
   );
 
+  // Work and urgent prints are unlimited and never touch the working-hours
+  // quotas: only fun prints are charged against the weekly and monthly caps.
+  const quotaRelevant = relevant.filter((r) => r.priority === 'fun');
+
   return {
     activeReservations: relevant.filter(
       (r) =>
         (r.status === 'scheduled' || r.status === 'in_progress') &&
         r.endsAt.getTime() > now.getTime(),
     ).length,
-    workingWeekReservations: workingWeekReservations(relevant, slotStart, policy),
-    monthWorkingMinutes: monthWorkingMinutes(relevant, slotStart, policy),
+    workingWeekReservations: workingWeekReservations(quotaRelevant, slotStart, policy),
+    monthWorkingMinutes: monthWorkingMinutes(quotaRelevant, slotStart, policy),
   };
 }

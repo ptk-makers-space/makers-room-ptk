@@ -86,6 +86,7 @@ export default async function MyPrintsPage() {
                 row={row}
                 printerName={printerNames.get(row.printer_id) ?? ''}
                 timeZone={policy.timeZone}
+                showCalendarLink
               />
             ))
           )}
@@ -107,6 +108,7 @@ export default async function MyPrintsPage() {
                 hostName={
                   reservation.profile?.full_name || reservation.profile?.email || 'Member'
                 }
+                showCalendarLink
               />
             ))
           )}
@@ -155,6 +157,7 @@ function ReservationCard({
   printerName,
   timeZone,
   hostName,
+  showCalendarLink,
 }: {
   row: {
     id: string;
@@ -169,6 +172,8 @@ function ReservationCard({
   timeZone: string;
   /** Set when the card shows someone else's session that you joined. */
   hostName?: string;
+  /** Offer an .ics download; only meaningful for prints that have not finished. */
+  showCalendarLink?: boolean;
 }) {
   const start = new Date(row.starts_at);
   const end = new Date(row.ends_at);
@@ -193,6 +198,16 @@ function ReservationCard({
           {hostName ? ` · hosted by ${hostName}` : ''}
         </p>
       </div>
+      {showCalendarLink ? (
+        <a
+          href={`/api/reservations/${row.id}/ics`}
+          download
+          className="rounded-full border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          title="Download an .ics file for your calendar"
+        >
+          📅 Add to calendar
+        </a>
+      ) : null}
       {hostName ? (
         <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
           👥 Joined

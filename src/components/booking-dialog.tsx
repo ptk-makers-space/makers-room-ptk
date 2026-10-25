@@ -75,6 +75,14 @@ export function BookingDialog({
   const [isChecking, setIsChecking] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  /** Set once the booking is saved; the dialog then offers the calendar file. */
+  const [booked, setBooked] = useState<{
+    id: string;
+    title: string;
+    startsAt: string;
+    endsAt: string;
+    printerName: string;
+  } | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -87,6 +95,7 @@ export function BookingDialog({
     setServerError(null);
     setDecision(null);
     setAllowsJoiners(false);
+    setBooked(null);
   }, [open, initial.printerId, initial.dateKey, initial.startTime]);
 
   useEffect(() => {
@@ -127,7 +136,7 @@ export function BookingDialog({
 
   // Ask the server to run the full rule set as the member edits.
   useEffect(() => {
-    if (!open || !payload) return;
+    if (!open || !payload || booked) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       setIsChecking(true);
@@ -151,7 +160,7 @@ export function BookingDialog({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [open, payload]);
+  }, [open, payload, booked]);
 
   const submit = useCallback(async () => {
     if (!payload) return;
@@ -169,16 +178,90 @@ export function BookingDialog({
         if (body.decision) setDecision(body.decision);
         return;
       }
-      onClose();
+      const reservation = body.reservation as {
+        id: string;
+        title: string;
+        starts_at: string;
+        ends_at: string;
+        printer_id: string;
+      };
+      // Keep the dialog open so the member can grab the calendar file; the
+      // schedule behind it refreshes straight away.
+      setBooked({
+        id: reservation.id,
+        title: reservation.title,
+        startsAt: reservation.starts_at,
+        endsAt: reservation.ends_at,
+        printerName:
+          printers.find((printer) => printer.id === reservation.printer_id)?.name ?? '',
+      });
       router.refresh();
     } catch (error) {
       setServerError(error instanceof Error ? error.message : 'Network error.');
     } finally {
       setIsSaving(false);
     }
-  }, [payload, onClose, router]);
+  }, [payload, printers, router]);
 
   if (!open) return null;
+
+  if (booked) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Print booked"
+          className="w-full max-w-lg rounded-t-2xl bg-white p-6 shadow-xl sm:rounded-2xl"
+        >
+          <h2 className="text-base font-semibold text-slate-900">✅ Your print is booked</h2>
+          <p className="mt-2 text-sm text-slate-600">
+            <strong className="text-slate-900">{booked.title}</strong> on {booked.printerName}
+            <br />
+            {new Intl.DateTimeFormat('en-GB', {
+              timeZone: policy.timeZone,
+              weekday: 'short',
+              day: 'numeric',
+              month: 'short',
+              hour: '2-digit',
+              minute: '2-digit',
+            }).format(new Date(booked.startsAt))}
+            {' – '}
+            {new Intl.DateTimeFormat('en-GB', {
+              timeZone: policy.timeZone,
+              hour: '2-digit',
+              minute: '2-digit',
+            }).format(new Date(booked.endsAt))}
+          </p>
+
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-medium text-slate-900">Want a reminder?</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Download the calendar file and open it to add this print to Google, Outlook or
+              Apple Calendar. It includes a reminder one hour before the start.
+            </p>
+            <a
+              href={`/api/reservations/${booked.id}/ics`}
+              download
+              className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              📅 Add to my calendar
+            </a>
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const blockers = decision?.violations ?? [];
   const canSubmit =

@@ -115,6 +115,7 @@ function toUsageReservation(row: ReservationRow): UsageReservation {
     startsAt: new Date(row.starts_at),
     endsAt: new Date(row.ends_at),
     status: row.status,
+    priority: row.priority,
   };
 }
 

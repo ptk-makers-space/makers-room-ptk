@@ -235,8 +235,11 @@ export function evaluateBooking(
     }
 
     // Working-week and monthly budgets only charge for daytime Sun-Thu use:
-    // nights and weekends stay free so the machines keep running.
+    // nights and weekends stay free so the machines keep running. Work and
+    // urgent prints are unlimited and never subject to these caps — only
+    // fun prints are rationed.
     if (
+      request.priority === 'fun' &&
       classification.isWorkingDaytime &&
       usage.workingWeekReservations >= policy.maxPrintsPerWorkingWeek
     ) {
@@ -250,6 +253,7 @@ export function evaluateBooking(
 
     const monthMinutes = classification.workingDaytimeMinutes;
     if (
+      request.priority === 'fun' &&
       monthMinutes > 0 &&
       usage.monthWorkingMinutes + monthMinutes > policy.monthlyWorkingMinutesCap
     ) {
