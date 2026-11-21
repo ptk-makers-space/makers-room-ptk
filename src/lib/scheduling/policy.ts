@@ -34,6 +34,12 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
 
   openBookingHours: 24,
 
+  maxOvernightPrintsPerMonth: 2,
+  overnightOpenBookingHours: 5,
+
+  lateCancelHours: 3,
+  lateCancelPenaltyRatio: 0.5,
+
   urgentRequiresJustification: true,
 
   // Urgent work jobs bump hobby prints, never other work.

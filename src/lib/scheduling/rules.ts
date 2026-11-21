@@ -24,6 +24,14 @@ import type {
 /** Statuses that still occupy time on a printer. */
 const BLOCKING_STATUSES = new Set(['scheduled', 'in_progress']);
 
+/** Quota rules an admin may knowingly break after approving a warning. */
+export const ADMIN_OVERRIDABLE_CODES = new Set([
+  'too_many_active',
+  'working_week_print_cap',
+  'monthly_cap',
+  'monthly_night_cap',
+]);
+
 function error(code: string, message: string): RuleViolation {
   return { code, message, severity: 'error' };
 }
@@ -33,6 +41,7 @@ function warn(code: string, message: string): RuleViolation {
 }
 
 export function formatMinutes(total: number): string {
+  if (total < 0) return `-${formatMinutes(-total)}`;
   const rounded = Math.round(total);
   const hours = Math.floor(rounded / 60);
   const minutes = rounded % 60;
@@ -216,14 +225,31 @@ export function evaluateBooking(
   }
 
   // --- Quota limits -------------------------------------------------------
-  // Inside the open window every free slot is fair game, so these are skipped.
-  if (isOpenBooking) {
-    warnings.push(
-      warn(
-        'open_booking',
-        `This slot starts within ${policy.openBookingHours}h, so it is open to any member regardless of quota.`,
+  // Overnight fun prints have their own monthly cap, which only lifts much
+  // closer to the start than the general open window.
+  const nightCapApplies =
+    request.priority === 'fun' &&
+    classification.isOvernight &&
+    classification.leadTimeHours > policy.overnightOpenBookingHours;
+  if (nightCapApplies && usage.monthOvernightPrints >= policy.maxOvernightPrintsPerMonth) {
+    violations.push(
+      error(
+        'monthly_night_cap',
+        `Overnight fun prints are limited to ${policy.maxOvernightPrintsPerMonth} per month and you already have ${usage.monthOvernightPrints}. A free night slot opens to everyone ${policy.overnightOpenBookingHours}h before it starts.`,
       ),
     );
+  }
+
+  // Inside the open window every free slot is fair game, so these are skipped.
+  if (isOpenBooking) {
+    if (!nightCapApplies) {
+      warnings.push(
+        warn(
+          'open_booking',
+          `This slot starts within ${policy.openBookingHours}h, so it is open to any member regardless of quota.`,
+        ),
+      );
+    }
   } else {
     if (usage.activeReservations >= policy.maxActiveReservations) {
       violations.push(
@@ -372,6 +398,9 @@ export function evaluateBooking(
     classification,
     violations,
     warnings,
+    overridable:
+      violations.length > 0 && violations.every((v) => ADMIN_OVERRIDABLE_CODES.has(v.code)),
+    usage,
     preemptions,
   };
 }

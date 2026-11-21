@@ -1,5 +1,7 @@
 import Link from 'next/link';
 
+import { formatMinutes } from '@/lib/scheduling';
+
 import type { ViewerSummary } from './calendar-types';
 
 export function AppHeader({
@@ -15,6 +17,16 @@ export function AppHeader({
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join('');
+
+  const { budget } = viewer;
+  const leftRatio =
+    budget.capMinutes > 0 ? Math.max(budget.remainingMinutes, 0) / budget.capMinutes : 0;
+  const tone =
+    leftRatio > 0.5
+      ? { box: 'border-emerald-200 bg-emerald-50 text-emerald-900', bar: 'bg-emerald-500' }
+      : leftRatio > 0.2
+        ? { box: 'border-amber-200 bg-amber-50 text-amber-900', bar: 'bg-amber-500' }
+        : { box: 'border-rose-200 bg-rose-50 text-rose-900', bar: 'bg-rose-500' };
 
   return (
     <header className="border-b border-slate-200 bg-white">
@@ -44,12 +56,30 @@ export function AppHeader({
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
-          <span
+          <Link
+            href="/my-prints"
             title={viewer.quotaExplanation}
-            className="hidden rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 sm:inline"
+            className={`flex flex-col gap-1 rounded-lg border px-3 py-1.5 ${tone.box}`}
           >
-            {viewer.monthlyBudgetLabel}
-          </span>
+            <span className="flex items-baseline gap-2 text-xs">
+              <span>☀️ Daytime budget</span>
+              <span className="text-sm font-semibold">
+                {budget.remainingMinutes < 0
+                  ? `${formatMinutes(-budget.remainingMinutes)} in minus`
+                  : `${formatMinutes(budget.remainingMinutes)} left`}
+              </span>
+              <span className="opacity-70">of {formatMinutes(budget.capMinutes)}</span>
+              <span className="opacity-70">
+                · 🌙 {Math.max(budget.nightsCap - budget.nightsUsed, 0)}/{budget.nightsCap} nights
+              </span>
+            </span>
+            <span className="h-1.5 w-full overflow-hidden rounded-full bg-white/70">
+              <span
+                className={`block h-full rounded-full ${tone.bar}`}
+                style={{ width: `${Math.round(leftRatio * 100)}%` }}
+              />
+            </span>
+          </Link>
           <Link
             href="/onboarding"
             className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700"

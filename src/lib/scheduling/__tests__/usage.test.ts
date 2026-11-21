@@ -144,4 +144,64 @@ describe('computeUsage', () => {
     );
     expect(usage.activeReservations).toBe(2);
   });
+
+  it('charges overrun penalties to the monthly budget', () => {
+    const usage = computeUsage(
+      [res({ id: 'overran', priority: 'standard', overrunPenaltyMinutes: 45 })],
+      { ...base, slotStart: at(10, 10) },
+    );
+    expect(usage.monthWorkingMinutes).toBe(45);
+  });
+
+  it('carries a penalty-driven deficit into the next month', () => {
+    const february = zonedWallTimeToDate(2026, 2, 10, 10, 0, TZ);
+    const usage = computeUsage(
+      [
+        res({
+          id: 'feb',
+          priority: 'standard',
+          startsAt: february,
+          endsAt: new Date(february.getTime() + 60 * 60_000),
+          overrunPenaltyMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap + 100,
+        }),
+      ],
+      { ...base, slotStart: at(10, 10) },
+    );
+    expect(usage.monthWorkingMinutes).toBe(100);
+  });
+
+  it('does not carry over overage that came only from prints', () => {
+    const february = zonedWallTimeToDate(2026, 2, 10, 8, 0, TZ);
+    const usage = computeUsage(
+      [
+        res({
+          id: 'feb-long',
+          startsAt: february,
+          endsAt: zonedWallTimeToDate(2026, 2, 12, 17, 0, TZ),
+        }),
+      ],
+      { ...base, slotStart: at(10, 10) },
+    );
+    expect(usage.monthWorkingMinutes).toBe(0);
+  });
+
+  it('charges late-cancellation penalties to the monthly budget', () => {
+    const usage = computeUsage(
+      [res({ id: 'late', status: 'cancelled', cancelPenaltyMinutes: 90 })],
+      { ...base, slotStart: at(10, 10) },
+    );
+    expect(usage.monthWorkingMinutes).toBe(90);
+  });
+
+  it('counts overnight fun prints, except ones booked in the night open window', () => {
+    const usage = computeUsage(
+      [
+        res({ id: 'n1', startsAt: at(4, 20), endsAt: at(5, 6), createdAt: at(1, 10) }),
+        res({ id: 'n2', startsAt: at(6, 20), endsAt: at(7, 6), createdAt: at(6, 17) }),
+        res({ id: 'day', startsAt: at(4, 10), endsAt: at(4, 13), createdAt: at(1, 10) }),
+      ],
+      { ...base, slotStart: at(10, 20) },
+    );
+    expect(usage.monthOvernightPrints).toBe(1);
+  });
 });

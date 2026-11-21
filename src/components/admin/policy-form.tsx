@@ -40,6 +40,21 @@ const SECTIONS: { title: string; fields: NumberField[] }[] = [
         min: 1,
         max: 168,
       },
+      { key: 'maxOvernightPrintsPerMonth', label: 'Overnight fun prints per month', min: 0, max: 31 },
+      {
+        key: 'overnightOpenBookingHours',
+        label: 'Night limit waived this close to start',
+        hint: 'hours',
+        min: 0,
+        max: 168,
+      },
+      {
+        key: 'lateCancelHours',
+        label: 'Late-cancel penalty window',
+        hint: 'hours before start',
+        min: 0,
+        max: 168,
+      },
     ],
   },
   {
