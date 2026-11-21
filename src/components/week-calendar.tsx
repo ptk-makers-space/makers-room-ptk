@@ -465,6 +465,7 @@ export function WeekCalendar({
         onClose={() => setDialogState((state) => ({ ...state, open: false }))}
         printers={bookablePrinters}
         policy={policy}
+        isAdmin={viewer.role === 'admin'}
         initial={dialogState}
       />
     </div>
@@ -591,15 +592,24 @@ function ReservationSheet({
   const [moved, setMoved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isAdminViewer = viewer.role === 'admin';
+  const startsAtMs = new Date(reservation.startsAt).getTime();
   const canCancel =
     reservation.status === 'scheduled' &&
-    (reservation.userId === viewer.id || viewer.role === 'admin');
+    (isAdminViewer || (reservation.userId === viewer.id && startsAtMs > Date.now()));
   const canChangeTime =
     viewer.role === 'admin'
       ? reservation.status === 'scheduled' || reservation.status === 'in_progress'
       : reservation.userId === viewer.id &&
-        (reservation.status === 'scheduled' || reservation.status === 'in_progress') &&
-        new Date(reservation.endsAt).getTime() > Date.now();
+        reservation.status === 'scheduled' &&
+        startsAtMs > Date.now();
+  const canReportLate =
+    reservation.userId === viewer.id &&
+    (reservation.status === 'scheduled' || reservation.status === 'in_progress') &&
+    startsAtMs <= Date.now() &&
+    new Date(reservation.endsAt).getTime() > Date.now();
+  const [isReportingLate, setIsReportingLate] = useState(false);
+  const [lateNotice, setLateNotice] = useState<string | null>(null);
   const style = PRIORITY_STYLES[reservation.priority];
 
   const hasJoined = reservation.participants.some(
@@ -616,6 +626,19 @@ function ReservationSheet({
     new Date(reservation.endsAt).getTime() > Date.now();
 
   async function cancel() {
+    const isLate =
+      !isAdminViewer &&
+      reservation.priority === 'fun' &&
+      startsAtMs - Date.now() <= policy.lateCancelHours * 60 * 60 * 1000;
+    if (isLate) {
+      const slotMinutes = (new Date(reservation.endsAt).getTime() - startsAtMs) / 60_000;
+      const penalty = formatMinutes(slotMinutes * policy.lateCancelPenaltyRatio);
+      const confirmed = window.confirm(
+        `This print starts in less than ${policy.lateCancelHours}h. Cancelling now takes ${penalty} off your monthly daytime budget. Cancel anyway?`,
+      );
+      if (!confirmed) return;
+    }
+
     setIsCancelling(true);
     setError(null);
     try {
@@ -720,6 +743,25 @@ function ReservationSheet({
           </p>
         ) : null}
 
+        {isReportingLate ? (
+          <LateStartForm
+            reservation={reservation}
+            policy={policy}
+            onCancel={() => setIsReportingLate(false)}
+            onSaved={(notice) => {
+              setIsReportingLate(false);
+              setLateNotice(notice);
+              onRefresh();
+            }}
+          />
+        ) : null}
+
+        {lateNotice ? (
+          <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+            {lateNotice}
+          </p>
+        ) : null}
+
         {isEditing ? (
           <ChangeTimeForm
             reservation={reservation}
@@ -761,6 +803,18 @@ function ReservationSheet({
             >
               📅 Add to calendar
             </a>
+          ) : null}
+          {canReportLate && !isReportingLate && !lateNotice ? (
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                setIsReportingLate(true);
+              }}
+              className="rounded-lg border border-amber-300 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50"
+            >
+              Started late?
+            </button>
           ) : null}
           {canChangeTime && !isEditing && !moved ? (
             <button
@@ -826,6 +880,133 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+/**
+ * Shift a running print that started late because the previous print overran.
+ * The print keeps its length; the delay is charged to the previous owner.
+ */
+function LateStartForm({
+  reservation,
+  policy,
+  onCancel,
+  onSaved,
+}: {
+  reservation: CalendarReservation;
+  policy: SchedulingPolicy;
+  onCancel: () => void;
+  onSaved: (notice: string) => void;
+}) {
+  const timeZone = policy.timeZone;
+  const bookedStart = new Date(reservation.startsAt);
+  const bookedEnd = new Date(reservation.endsAt);
+  const stepMs = policy.slotGranularityMinutes * 60_000;
+  const nowRounded = new Date(Math.floor(Date.now() / stepMs) * stepMs);
+
+  const [startDate, setStartDate] = useState(toDateKey(nowRounded, timeZone));
+  const [startTime, setStartTime] = useState(formatTime(nowRounded, timeZone));
+  const [confirmed, setConfirmed] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const actualStart = toInstant(startDate, startTime, timeZone);
+  const delayMinutes = actualStart
+    ? Math.round((actualStart.getTime() - bookedStart.getTime()) / 60_000)
+    : 0;
+  const newEnd = new Date(bookedEnd.getTime() + Math.max(delayMinutes, 0) * 60_000);
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    if (!actualStart || delayMinutes <= 0) {
+      setError('The actual start must be later than the booked start.');
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/reservations/${reservation.id}/late-start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startsAt: actualStart.toISOString(),
+          endsAt: newEnd.toISOString(),
+          confirmPreviousOverran: confirmed,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(body.error ?? 'Could not report the late start.');
+        return;
+      }
+      onSaved(
+        `Your print now runs ${formatTime(actualStart, timeZone)}–${formatTime(newEnd, timeZone)}. ${formatMinutes(
+          body.delayMinutes,
+        )} was charged to ${body.blamedOwnerName}.`,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Network error.');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  const inputClass =
+    'w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-900';
+
+  return (
+    <form onSubmit={save} className="mt-4 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+      <p className="text-xs text-slate-600">
+        If the previous print on this printer had not finished, enter when yours actually
+        started. Your slot moves by the delay and keeps its length; the delay is taken off
+        the previous member&apos;s budget.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-600">Actually started</span>
+          <input type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-transparent">time</span>
+          <input type="time" required step={policy.slotGranularityMinutes * 60} value={startTime} onChange={(e) => setStartTime(e.target.value)} className={inputClass} />
+        </label>
+      </div>
+      <p className="text-sm text-slate-700">
+        {delayMinutes > 0
+          ? `Delay: ${formatMinutes(delayMinutes)} · new end ${formatTime(newEnd, timeZone)}`
+          : 'Pick a time after the booked start.'}
+      </p>
+      <label className="flex items-start gap-2 text-sm text-slate-800">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          onChange={(event) => setConfirmed(event.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-slate-300"
+        />
+        <span>I confirm my print started late because the previous print had not finished.</span>
+      </label>
+      {error ? (
+        <p role="alert" className="rounded-lg bg-rose-50 p-2 text-sm text-rose-700">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-100"
+        >
+          Back
+        </button>
+        <button
+          type="submit"
+          disabled={isSaving || !confirmed || delayMinutes <= 0}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {isSaving ? 'Saving…' : 'Approve & shift my print'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** Move a booking to another time or printer. Admins bypass member quotas. */
 function ChangeTimeForm({
   reservation,
@@ -853,15 +1034,19 @@ function ChangeTimeForm({
   const [endTime, setEndTime] = useState(formatTime(end, timeZone));
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Quota rules the admin must approve breaking before the move goes through. */
+  const [ruleWarnings, setRuleWarnings] = useState<{ code: string; message: string }[]>([]);
+
+  // An approval only covers the slot it was shown for.
+  useEffect(() => {
+    setRuleWarnings([]);
+  }, [printerId, startDate, startTime, endDate, endTime]);
 
   const choices = printers.filter(
     (printer) => !printer.inMaintenance || printer.id === reservation.printerId,
   );
-  const isRunning =
-    !isAdminChange &&
-    (reservation.status === 'in_progress' || start.getTime() <= Date.now());
 
-  async function save(event: React.FormEvent) {
+  async function save(event: React.FormEvent, approveRuleOverride = false) {
     event.preventDefault();
     const startsAt = toInstant(startDate, startTime, timeZone);
     const endsAt = toInstant(endDate, endTime, timeZone);
@@ -884,13 +1069,19 @@ function ChangeTimeForm({
           printerId,
           startsAt: startsAt.toISOString(),
           endsAt: endsAt.toISOString(),
+          approveRuleOverride,
         }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
+        if (body.requiresApproval) {
+          setRuleWarnings(body.warnings ?? []);
+          return;
+        }
         setError(body.error ?? 'Could not move that print.');
         return;
       }
+      setRuleWarnings([]);
       onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Network error.');
@@ -907,10 +1098,8 @@ function ChangeTimeForm({
     <form onSubmit={save} className="mt-4 space-y-3 rounded-lg border border-slate-200 p-3">
       <p className="text-xs text-slate-500">
         {isAdminChange
-          ? 'Admin change — quotas are skipped, but the slot must be free'
-          : isRunning
-            ? 'This print has started: you can start it earlier or let it run longer on the same printer, as long as the time is free'
-            : 'The usual booking rules apply, and the new slot must be free'}
+          ? 'Admin change — you will be warned before breaking the owner\'s quotas, and the slot must be free'
+          : 'The usual booking rules apply, and the new slot must be free'}
         {policy.bufferMinutes > 0
           ? `, including the ${policy.bufferMinutes}-minute cleaning gap`
           : ''}
@@ -920,7 +1109,6 @@ function ChangeTimeForm({
         <span className="mb-1 block text-xs font-medium text-slate-600">Printer</span>
         <select
           value={printerId}
-          disabled={isRunning}
           onChange={(event) => setPrinterId(event.target.value)}
           className={inputClass}
         >
@@ -955,6 +1143,17 @@ function ChangeTimeForm({
           {error}
         </p>
       ) : null}
+      {ruleWarnings.length > 0 ? (
+        <div className="space-y-1 rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+          <p className="font-medium">⚠️ This move breaks the house rules for the owner:</p>
+          <ul className="list-disc space-y-1 pl-5">
+            {ruleWarnings.map((warning) => (
+              <li key={warning.code}>{warning.message}</li>
+            ))}
+          </ul>
+          <p className="text-xs">Approving will move it anyway and log the override.</p>
+        </div>
+      ) : null}
       <div className="flex justify-end gap-2">
         <button
           type="button"
@@ -970,6 +1169,16 @@ function ChangeTimeForm({
         >
           {isSaving ? 'Saving…' : 'Save new time'}
         </button>
+        {ruleWarnings.length > 0 ? (
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={(event) => save(event, true)}
+            className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          >
+            Approve &amp; move
+          </button>
+        ) : null}
       </div>
     </form>
   );

@@ -3,12 +3,13 @@ import { NextResponse } from 'next/server';
 import { isAdmin, rescheduleReservation } from '@/lib/admin/service';
 import { rescheduleInputSchema } from '@/lib/bookings/schemas';
 import {
+  adminRescheduleQuotaWarnings,
   cancelReservation,
   checkOwnReschedule,
   getSessionContext,
 } from '@/lib/bookings/service';
 
-/** Move a booking. Owners go through the member rules; admins skip the quotas. */
+/** Move a booking. Owners go through the member rules; admins must approve breaking quotas. */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -27,11 +28,26 @@ export async function PATCH(
   }
 
   const { id } = await params;
+  let overriddenRules: string[] = [];
   if (!isAdmin(session)) {
     const check = await checkOwnReschedule(session, id, parsed.data);
     if (!check.ok) return NextResponse.json({ error: check.message }, { status: 400 });
+  } else {
+    const check = await adminRescheduleQuotaWarnings(id, parsed.data);
+    if (!check.ok) return NextResponse.json({ error: check.message }, { status: 400 });
+    if (check.warnings.length > 0 && parsed.data.approveRuleOverride !== true) {
+      return NextResponse.json(
+        {
+          error: 'This move breaks the house rules for the booking owner.',
+          requiresApproval: true,
+          warnings: check.warnings,
+        },
+        { status: 409 },
+      );
+    }
+    overriddenRules = check.warnings.map((warning) => warning.code);
   }
-  const result = await rescheduleReservation(session, id, parsed.data);
+  const result = await rescheduleReservation(session, id, parsed.data, overriddenRules);
   if (!result.ok) return NextResponse.json({ error: result.message }, { status: 400 });
   return NextResponse.json({ ok: true });
 }
@@ -52,5 +68,5 @@ export async function DELETE(
   if (!result.ok) {
     return NextResponse.json({ error: result.message }, { status: 400 });
   }
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, penaltyMinutes: result.penaltyMinutes ?? 0 });
 }

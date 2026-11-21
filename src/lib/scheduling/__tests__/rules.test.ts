@@ -41,6 +41,7 @@ function makeUsage(overrides: Partial<UserUsage> = {}): UserUsage {
     activeReservations: 0,
     workingWeekReservations: 0,
     monthWorkingMinutes: 0,
+    monthOvernightPrints: 0,
     ...overrides,
   };
 }
@@ -638,5 +639,69 @@ describe('working-week and monthly budgets', () => {
     );
     expect(result.classification.isOpenBooking).toBe(true);
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe('overnight monthly cap', () => {
+  const nightUsage = makeUsage({
+    monthOvernightPrints: DEFAULT_POLICY.maxOvernightPrintsPerMonth,
+  });
+
+  it('limits overnight fun prints per month', () => {
+    const result = evaluate(
+      { priority: 'fun', startsAt: at(4, 20), endsAt: at(5, 6) },
+      { usage: nightUsage },
+    );
+    expect(codes(result)).toContain('monthly_night_cap');
+    expect(result.overridable).toBe(true);
+  });
+
+  it('still applies inside the general 24h open window', () => {
+    // Starts 10h from now: inside 24h, outside the 5h night window.
+    const result = evaluate(
+      { priority: 'fun', startsAt: at(2, 20), endsAt: at(3, 6) },
+      { usage: nightUsage },
+    );
+    expect(codes(result)).toContain('monthly_night_cap');
+  });
+
+  it('lifts for a free night slot close to the start', () => {
+    const result = evaluate(
+      { priority: 'fun', startsAt: at(2, 20), endsAt: at(3, 6) },
+      { now: at(2, 16), usage: nightUsage },
+    );
+    expect(codes(result)).not.toContain('monthly_night_cap');
+    expect(result.allowed).toBe(true);
+  });
+
+  it('does not limit overnight work prints', () => {
+    const result = evaluate(
+      { priority: 'standard', startsAt: at(4, 20), endsAt: at(5, 6) },
+      { usage: nightUsage },
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('admin overrides', () => {
+  it('marks quota-only violations as overridable', () => {
+    const result = evaluate(
+      { priority: 'fun' },
+      { usage: makeUsage({ monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap }) },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.overridable).toBe(true);
+  });
+
+  it('never lets a slot conflict be overridden', () => {
+    const result = evaluate(
+      { priority: 'fun' },
+      {
+        usage: makeUsage({ monthWorkingMinutes: DEFAULT_POLICY.monthlyWorkingMinutesCap }),
+        printerReservations: [makeReservation({ priority: 'standard' })],
+      },
+    );
+    expect(codes(result)).toContain('slot_taken');
+    expect(result.overridable).toBe(false);
   });
 });

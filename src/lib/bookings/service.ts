@@ -12,6 +12,7 @@ import type {
   ReservationWithProfile,
 } from '@/lib/supabase/types';
 import {
+  ADMIN_OVERRIDABLE_CODES,
   computeUsage,
   evaluateBooking,
   resolvePolicy,
@@ -19,11 +20,12 @@ import {
   type BookingRequest,
   type ExistingReservation,
   type MemberProfile,
+  type RuleViolation,
   type SchedulingPolicy,
 } from '@/lib/scheduling';
 import type { UsageReservation } from '@/lib/scheduling/usage';
 
-import type { BookingInput, RescheduleInput } from './schemas';
+import type { BookingInput, LateStartInput, RescheduleInput } from './schemas';
 
 type Client = SupabaseClient<Database>;
 
@@ -116,6 +118,9 @@ function toUsageReservation(row: ReservationRow): UsageReservation {
     endsAt: new Date(row.ends_at),
     status: row.status,
     priority: row.priority,
+    createdAt: new Date(row.created_at),
+    cancelPenaltyMinutes: row.cancel_penalty_minutes ?? 0,
+    overrunPenaltyMinutes: row.overrun_penalty_minutes ?? 0,
   };
 }
 
@@ -225,6 +230,7 @@ export async function evaluateRequest(
       decision: {
         ...decision,
         allowed: false,
+        overridable: false,
         violations: [
           {
             code: 'printer_unavailable',
@@ -260,7 +266,14 @@ export async function createReservation(
   const userClient = await createClient();
   const { decision } = await evaluateRequest(userClient, session, input, now);
 
-  if (!decision.allowed) {
+  // Admins may break quota rules, but only after explicitly approving the warning.
+  const isOverride =
+    !decision.allowed &&
+    decision.overridable &&
+    session.profile.role === 'admin' &&
+    input.approveRuleOverride === true;
+
+  if (!decision.allowed && !isOverride) {
     return {
       ok: false,
       decision,
@@ -298,14 +311,24 @@ export async function createReservation(
     };
   }
 
-  return { ok: true, reservation: data as unknown as ReservationRow, decision };
+  const reservation = data as unknown as ReservationRow;
+  if (isOverride) {
+    await admin.from('reservation_events').insert({
+      reservation_id: reservation.id,
+      actor_id: session.userId,
+      event_type: 'rule_override',
+      payload: { violations: decision.violations.map((v) => v.code) },
+    });
+  }
+
+  return { ok: true, reservation, decision };
 }
 
 /**
  * Check a member may move their own booking to the new slot. Unlike an admin
  * move, the full rule set (quotas, gaps, suspension) applies, and the new slot
- * must be free outright rather than bumping anyone. A print that has already
- * started stays on its printer and may only start earlier and/or end later.
+ * must be free outright rather than bumping anyone. Once a print has started
+ * its time is locked; a late start is reported through `reportLateStart`.
  */
 export async function checkOwnReschedule(
   session: SessionContext,
@@ -335,24 +358,11 @@ export async function checkOwnReschedule(
   const hasStarted =
     existing.status === 'in_progress' || new Date(existing.starts_at).getTime() <= now.getTime();
   if (hasStarted) {
-    if (new Date(existing.ends_at).getTime() <= now.getTime()) {
-      return { ok: false, message: 'This print has already finished.' };
-    }
-    if (input.printerId !== existing.printer_id) {
-      return { ok: false, message: 'A print that has started cannot move to another printer.' };
-    }
-    if (new Date(input.startsAt).getTime() > new Date(existing.starts_at).getTime()) {
-      return {
-        ok: false,
-        message: 'A print that has started can only be moved to start earlier, not later.',
-      };
-    }
-    if (new Date(input.endsAt).getTime() < new Date(existing.ends_at).getTime()) {
-      return {
-        ok: false,
-        message: 'A print that has started can only be extended, not shortened.',
-      };
-    }
+    return {
+      ok: false,
+      message:
+        'A print that has started cannot be changed. If it started late because the previous print ran over, use "Started late".',
+    };
   }
 
   const userClient = await createClient();
@@ -373,12 +383,8 @@ export async function checkOwnReschedule(
     now,
   );
 
-  // A running print's start is already in the past by definition.
-  const violations = decision.violations.filter(
-    (violation) => !(hasStarted && violation.code === 'in_the_past'),
-  );
-  if (violations.length > 0) {
-    return { ok: false, message: violations[0].message };
+  if (decision.violations.length > 0) {
+    return { ok: false, message: decision.violations[0].message };
   }
   if (decision.preemptions.length > 0) {
     return { ok: false, message: 'That slot is already booked. Pick a free time.' };
@@ -386,16 +392,21 @@ export async function checkOwnReschedule(
   return { ok: true };
 }
 
-/** Cancel a booking. Members may cancel their own; admins may cancel any. */
+/**
+ * Cancel a booking. Members may cancel their own before it starts; a late
+ * cancellation charges part of the slot to their monthly budget. Admins may
+ * cancel any booking at any time, free of charge.
+ */
 export async function cancelReservation(
   session: SessionContext,
   reservationId: string,
-): Promise<{ ok: boolean; message?: string }> {
+  now: Date = new Date(),
+): Promise<{ ok: boolean; message?: string; penaltyMinutes?: number }> {
   const admin = createAdminClient();
 
   const { data: existing, error: loadError } = await admin
     .from('reservations')
-    .select('id, user_id, status')
+    .select('id, user_id, status, priority, starts_at, ends_at')
     .eq('id', reservationId)
     .maybeSingle();
 
@@ -411,9 +422,30 @@ export async function cancelReservation(
     return { ok: false, message: 'Only a scheduled print can be cancelled.' };
   }
 
+  const startsAt = new Date(existing.starts_at).getTime();
+  if (!isAdmin && startsAt <= now.getTime()) {
+    return {
+      ok: false,
+      message: 'This print has already started and can no longer be cancelled. Ask an admin if it failed.',
+    };
+  }
+
+  let penaltyMinutes = 0;
+  if (!isAdmin && existing.priority === 'fun') {
+    const policy = await loadPolicy(admin);
+    if (startsAt - now.getTime() <= policy.lateCancelHours * 60 * 60 * 1000) {
+      const slotMinutes = (new Date(existing.ends_at).getTime() - startsAt) / 60_000;
+      penaltyMinutes = Math.round(slotMinutes * policy.lateCancelPenaltyRatio);
+    }
+  }
+
   const { error } = await admin
     .from('reservations')
-    .update({ status: 'cancelled' })
+    .update({
+      status: 'cancelled',
+      cancelled_at: now.toISOString(),
+      cancel_penalty_minutes: penaltyMinutes,
+    })
     .eq('id', reservationId)
     .eq('status', 'scheduled');
 
@@ -423,11 +455,197 @@ export async function cancelReservation(
     reservation_id: reservationId,
     actor_id: session.userId,
     event_type: 'cancelled',
-    payload: { by_admin: !isOwner },
+    payload: { by_admin: !isOwner, penalty_minutes: penaltyMinutes },
   });
 
-  return { ok: true };
+  return { ok: true, penaltyMinutes };
 }
+
+const PREVIOUS_PRINT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The owner of a running print reports it started late because the previous
+ * print on the printer had not finished. Their slot shifts by the delay (it
+ * cannot grow), and the delay is charged to the previous print's owner, whose
+ * budget may go negative and carry into next month.
+ */
+export async function reportLateStart(
+  session: SessionContext,
+  reservationId: string,
+  input: LateStartInput,
+  now: Date = new Date(),
+): Promise<
+  | { ok: true; delayMinutes: number; blamedOwnerName: string }
+  | { ok: false; message: string }
+> {
+  const admin = createAdminClient();
+
+  const { data: existing, error: loadError } = await admin
+    .from('reservations')
+    .select('id, user_id, printer_id, status, starts_at, ends_at')
+    .eq('id', reservationId)
+    .maybeSingle();
+  if (loadError) return { ok: false, message: loadError.message };
+  if (!existing) return { ok: false, message: 'That booking no longer exists.' };
+  if (existing.user_id !== session.userId) {
+    return { ok: false, message: 'Only the owner can report a late start.' };
+  }
+  if (existing.status !== 'scheduled' && existing.status !== 'in_progress') {
+    return { ok: false, message: 'Only a running print can report a late start.' };
+  }
+
+  const oldStart = new Date(existing.starts_at).getTime();
+  const oldEnd = new Date(existing.ends_at).getTime();
+  const newStart = new Date(input.startsAt).getTime();
+  const newEnd = new Date(input.endsAt).getTime();
+
+  if (oldStart > now.getTime()) {
+    return { ok: false, message: 'This print has not started yet. Change its time instead.' };
+  }
+  if (oldEnd <= now.getTime()) {
+    return { ok: false, message: 'This print has already finished.' };
+  }
+  if (newStart <= oldStart) {
+    return { ok: false, message: 'The actual start must be later than the booked start.' };
+  }
+  if (newStart > now.getTime()) {
+    return { ok: false, message: 'The actual start cannot be in the future.' };
+  }
+  const delayMs = newStart - oldStart;
+  if (newEnd > oldEnd + delayMs) {
+    return { ok: false, message: 'A late start can shift your print, but not make it longer.' };
+  }
+
+  const { count: alreadyReported } = await admin
+    .from('reservation_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('reservation_id', reservationId)
+    .eq('event_type', 'late_start');
+  if (alreadyReported && alreadyReported > 0) {
+    return { ok: false, message: 'A late start was already reported for this print.' };
+  }
+
+  const { data: previous, error: previousError } = await admin
+    .from('reservations')
+    .select('id, user_id, overrun_penalty_minutes, profile:profiles!reservations_user_id_fkey(full_name, email)')
+    .eq('printer_id', existing.printer_id)
+    .in('status', ['scheduled', 'in_progress', 'completed'])
+    .neq('id', reservationId)
+    .lte('ends_at', existing.starts_at)
+    .gt('ends_at', new Date(oldStart - PREVIOUS_PRINT_WINDOW_MS).toISOString())
+    .order('ends_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (previousError) return { ok: false, message: previousError.message };
+  if (!previous) {
+    return { ok: false, message: 'There was no print before yours on this printer to blame.' };
+  }
+  if (previous.user_id === session.userId) {
+    return { ok: false, message: 'The print before this one was your own.' };
+  }
+
+  const { error: updateError } = await admin
+    .from('reservations')
+    .update({ starts_at: new Date(newStart).toISOString(), ends_at: new Date(newEnd).toISOString() })
+    .eq('id', reservationId)
+    .in('status', ['scheduled', 'in_progress']);
+  if (updateError) {
+    return {
+      ok: false,
+      message:
+        updateError.code === '23P01'
+          ? 'That end time clashes with the next booking. Pick an earlier end.'
+          : updateError.message,
+    };
+  }
+
+  const delayMinutes = Math.round(delayMs / 60_000);
+  const { error: penaltyError } = await admin
+    .from('reservations')
+    .update({ overrun_penalty_minutes: (previous.overrun_penalty_minutes ?? 0) + delayMinutes })
+    .eq('id', previous.id);
+  if (penaltyError) return { ok: false, message: penaltyError.message };
+
+  await admin.from('reservation_events').insert([
+    {
+      reservation_id: reservationId,
+      actor_id: session.userId,
+      event_type: 'late_start',
+      payload: {
+        blamed_reservation_id: previous.id,
+        delay_minutes: delayMinutes,
+        old_starts_at: existing.starts_at,
+        old_ends_at: existing.ends_at,
+        new_starts_at: new Date(newStart).toISOString(),
+        new_ends_at: new Date(newEnd).toISOString(),
+      },
+    },
+    {
+      reservation_id: previous.id,
+      actor_id: session.userId,
+      event_type: 'overran',
+      payload: { delayed_reservation_id: reservationId, penalty_minutes: delayMinutes },
+    },
+  ]);
+
+  const profile = previous.profile as unknown as { full_name: string | null; email: string } | null;
+  return {
+    ok: true,
+    delayMinutes,
+    blamedOwnerName: profile?.full_name || profile?.email || 'the previous member',
+  };
+}
+
+/**
+ * Quota rules an admin move would break for the booking's owner. Admins may
+ * still go ahead, but only after approving these warnings.
+ */
+export async function adminRescheduleQuotaWarnings(
+  reservationId: string,
+  input: RescheduleInput,
+  now: Date = new Date(),
+): Promise<{ ok: true; warnings: RuleViolation[] } | { ok: false; message: string }> {
+  const admin = createAdminClient();
+
+  const { data: existing, error: loadError } = await admin
+    .from('reservations')
+    .select('id, user_id, title, notes, priority, justification, allows_joiners')
+    .eq('id', reservationId)
+    .maybeSingle();
+  if (loadError) return { ok: false, message: loadError.message };
+  if (!existing) return { ok: false, message: 'That booking no longer exists.' };
+
+  const { data: owner, error: ownerError } = await admin
+    .from('profiles')
+    .select('*')
+    .eq('id', existing.user_id)
+    .maybeSingle();
+  if (ownerError) return { ok: false, message: ownerError.message };
+  if (!owner) return { ok: true, warnings: [] };
+
+  const { decision } = await evaluateRequest(
+    admin,
+    { userId: owner.id, profile: owner },
+    {
+      printerId: input.printerId,
+      title: existing.title,
+      notes: existing.notes,
+      priority: existing.priority,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      justification: existing.justification,
+      allowsJoiners: existing.allows_joiners,
+      reservationId,
+    },
+    now,
+  );
+
+  return {
+    ok: true,
+    warnings: decision.violations.filter((v) => ADMIN_OVERRIDABLE_CODES.has(v.code)),
+  };
+}
+
 
 /**
  * Join someone else's print session.

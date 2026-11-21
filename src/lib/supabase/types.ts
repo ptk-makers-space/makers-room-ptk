@@ -107,6 +107,9 @@ export type Database = {
           preempted_by: string | null;
           preempted_at: string | null;
           allows_joiners: boolean;
+          cancelled_at: string | null;
+          cancel_penalty_minutes: number;
+          overrun_penalty_minutes: number;
           created_at: string;
           updated_at: string;
         };
@@ -124,6 +127,9 @@ export type Database = {
           preempted_by?: string | null;
           preempted_at?: string | null;
           allows_joiners?: boolean;
+          cancelled_at?: string | null;
+          cancel_penalty_minutes?: number;
+          overrun_penalty_minutes?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -141,6 +147,9 @@ export type Database = {
           preempted_by?: string | null;
           preempted_at?: string | null;
           allows_joiners?: boolean;
+          cancelled_at?: string | null;
+          cancel_penalty_minutes?: number;
+          overrun_penalty_minutes?: number;
           created_at?: string;
           updated_at?: string;
         };

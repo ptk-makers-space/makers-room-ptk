@@ -18,6 +18,8 @@ export const bookingInputSchema = z
     justification: z.string().trim().max(500).optional().nullable(),
     allowsJoiners: z.boolean().optional(),
     reservationId: z.string().uuid().optional().nullable(),
+    /** Admin confirmed they are knowingly breaking a quota rule. */
+    approveRuleOverride: z.boolean().optional(),
   })
   .refine((value) => new Date(value.endsAt) > new Date(value.startsAt), {
     message: 'The end time must be after the start time.',
@@ -58,6 +60,9 @@ export const policyInputSchema = z
     maxPrintsPerWorkingWeek: z.number().int().min(0).max(20),
     monthlyWorkingMinutesCap: z.number().int().min(0).max(200 * 60),
     maxActiveReservations: z.number().int().min(1).max(50),
+    maxOvernightPrintsPerMonth: z.number().int().min(0).max(31),
+    overnightOpenBookingHours: z.number().int().min(0).max(168),
+    lateCancelHours: z.number().int().min(0).max(168),
     workingDays: z.array(z.number().int().min(0).max(6)).max(7),
   })
   .partial();
@@ -83,6 +88,7 @@ export const rescheduleInputSchema = z
     printerId: z.string().uuid('Pick a printer.'),
     startsAt: z.string().datetime({ offset: true }),
     endsAt: z.string().datetime({ offset: true }),
+    approveRuleOverride: z.boolean().optional(),
   })
   .refine((value) => new Date(value.endsAt) > new Date(value.startsAt), {
     message: 'The end time must be after the start time.',
@@ -90,5 +96,21 @@ export const rescheduleInputSchema = z
   });
 
 export type RescheduleInput = z.infer<typeof rescheduleInputSchema>;
+
+/** A running print that started late because the previous print overran. */
+export const lateStartInputSchema = z
+  .object({
+    startsAt: z.string().datetime({ offset: true }),
+    endsAt: z.string().datetime({ offset: true }),
+    confirmPreviousOverran: z.literal(true, {
+      message: 'Confirm that the previous print had not finished.',
+    }),
+  })
+  .refine((value) => new Date(value.endsAt) > new Date(value.startsAt), {
+    message: 'The end time must be after the start time.',
+    path: ['endsAt'],
+  });
+
+export type LateStartInput = z.infer<typeof lateStartInputSchema>;
 
 export const DEFAULT_TIME_ZONE = DEFAULT_POLICY.timeZone;

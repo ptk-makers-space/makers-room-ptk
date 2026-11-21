@@ -19,14 +19,13 @@ interface BookingDialogProps {
   onClose: () => void;
   printers: CalendarPrinter[];
   policy: SchedulingPolicy;
+  /** Admins may book past quota rules after approving a warning. */
+  isAdmin?: boolean;
   /** Pre-filled from the slot the member clicked. */
   initial: { printerId: string; dateKey: string; startTime: string };
 }
 
-const DURATION_CHOICES = [
-  30, 60, 90, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 960,
-  1080, 1200, 1320, 1440,
-];
+const MAX_PRINT_MINUTES = 24 * 60;
 
 function timeOptions(granularity: number): string[] {
   const options: string[] = [];
@@ -58,6 +57,7 @@ export function BookingDialog({
   onClose,
   printers,
   policy,
+  isAdmin = false,
   initial,
 }: BookingDialogProps) {
   const router = useRouter();
@@ -75,6 +75,7 @@ export function BookingDialog({
   const [isChecking, setIsChecking] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [approvedOverride, setApprovedOverride] = useState(false);
   /** Set once the booking is saved; the dialog then offers the calendar file. */
   const [booked, setBooked] = useState<{
     id: string;
@@ -120,6 +121,54 @@ export function BookingDialog({
     [range, policy],
   );
 
+  // Every end time from the shortest booking up to 24h, labelled with the total length.
+  const endChoices = useMemo(() => {
+    const start = toInstant(dateKey, startTime, policy.timeZone);
+    if (!start) return [];
+    const granularity = policy.slotGranularityMinutes;
+    const step = granularity * Math.max(1, Math.round(15 / granularity));
+    const first = Math.ceil(policy.minReservationMinutes / step) * step;
+    const clock = new Intl.DateTimeFormat('en-GB', {
+      timeZone: policy.timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: policy.timeZone });
+    const startDay = day.format(start);
+
+    const choices: { minutes: number; label: string }[] = [];
+    for (let minutes = first; minutes <= MAX_PRINT_MINUTES; minutes += step) {
+      const end = new Date(start.getTime() + minutes * 60_000);
+      const nextDay = day.format(end) !== startDay ? ' (+1 day)' : '';
+      choices.push({
+        minutes,
+        label: `${clock.format(end)}${nextDay} · ${formatMinutes(minutes)}`,
+      });
+    }
+    return choices;
+  }, [dateKey, startTime, policy]);
+
+  // How much of this month's fun budget the slot would spend.
+  const budgetPreview = useMemo(() => {
+    if (!decision || !localClassification) return null;
+    const cap = policy.monthlyWorkingMinutesCap;
+    const before = cap - decision.usage.monthWorkingMinutes;
+    const isFun = priority === 'fun';
+    const charged = isFun ? localClassification.workingDaytimeMinutes : 0;
+    const usesNight =
+      isFun &&
+      localClassification.isOvernight &&
+      localClassification.leadTimeHours > policy.overnightOpenBookingHours;
+    return {
+      cap,
+      before,
+      after: before - charged,
+      isFun,
+      nightsBefore: policy.maxOvernightPrintsPerMonth - decision.usage.monthOvernightPrints,
+      usesNight,
+    };
+  }, [decision, localClassification, priority, policy]);
+
   const payload = useMemo(() => {
     if (!range) return null;
     return {
@@ -136,6 +185,7 @@ export function BookingDialog({
 
   // Ask the server to run the full rule set as the member edits.
   useEffect(() => {
+    setApprovedOverride(false);
     if (!open || !payload || booked) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
@@ -170,7 +220,7 @@ export function BookingDialog({
       const response = await fetch('/api/reservations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, approveRuleOverride: approvedOverride }),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -201,7 +251,7 @@ export function BookingDialog({
     } finally {
       setIsSaving(false);
     }
-  }, [payload, printers, router]);
+  }, [payload, approvedOverride, printers, router]);
 
   if (!open) return null;
 
@@ -264,8 +314,12 @@ export function BookingDialog({
   }
 
   const blockers = decision?.violations ?? [];
+  const canOverride = isAdmin && decision?.allowed === false && decision.overridable;
   const canSubmit =
-    !isSaving && !isChecking && Boolean(title.trim()) && decision?.allowed === true;
+    !isSaving &&
+    !isChecking &&
+    Boolean(title.trim()) &&
+    (decision?.allowed === true || (canOverride && approvedOverride));
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4">
@@ -348,15 +402,15 @@ export function BookingDialog({
                 ))}
               </select>
             </Field>
-            <Field label="Length">
+            <Field label="Ends">
               <select
                 value={duration}
                 onChange={(event) => setDuration(Number(event.target.value))}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
               >
-                {DURATION_CHOICES.map((minutes) => (
-                  <option key={minutes} value={minutes}>
-                    {formatMinutes(minutes)}
+                {endChoices.map((choice) => (
+                  <option key={choice.minutes} value={choice.minutes}>
+                    {choice.label}
                   </option>
                 ))}
               </select>
@@ -413,7 +467,80 @@ export function BookingDialog({
             </div>
           ) : null}
 
-          {blockers.length > 0 ? (
+          {budgetPreview ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-600">☀️ Daytime budget now</span>
+                <span>
+                  <strong className={budgetPreview.before < 0 ? 'text-rose-700' : 'text-slate-900'}>
+                    {formatMinutes(budgetPreview.before)}
+                  </strong>
+                  <span className="text-slate-500"> left of {formatMinutes(budgetPreview.cap)}</span>
+                </span>
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <span className="text-slate-600">After this booking</span>
+                {!budgetPreview.isFun ? (
+                  <span className="text-emerald-700">Unchanged — work prints are free</span>
+                ) : budgetPreview.after < 0 ? (
+                  <strong className="text-rose-700">
+                    Over by {formatMinutes(-budgetPreview.after)}
+                  </strong>
+                ) : (
+                  <strong
+                    className={
+                      budgetPreview.after === budgetPreview.before
+                        ? 'text-emerald-700'
+                        : 'text-slate-900'
+                    }
+                  >
+                    {formatMinutes(budgetPreview.after)} left
+                  </strong>
+                )}
+              </div>
+              {budgetPreview.isFun && localClassification?.isOvernight ? (
+                <div className="mt-1 flex items-center justify-between gap-3">
+                  <span className="text-slate-600">🌙 Night prints left</span>
+                  <span>
+                    {Math.max(budgetPreview.nightsBefore, 0)}
+                    {' → '}
+                    <strong
+                      className={
+                        budgetPreview.usesNight && budgetPreview.nightsBefore <= 0
+                          ? 'text-rose-700'
+                          : 'text-slate-900'
+                      }
+                    >
+                      {budgetPreview.usesNight
+                        ? Math.max(budgetPreview.nightsBefore - 1, 0)
+                        : `${Math.max(budgetPreview.nightsBefore, 0)} (free night slot)`}
+                    </strong>
+                    <span className="text-slate-500"> of {policy.maxOvernightPrintsPerMonth}</span>
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {canOverride ? (
+            <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-medium">⚠️ Admin: this booking breaks the house rules</p>
+              <ul className="list-disc space-y-1 pl-5">
+                {blockers.map((violation) => (
+                  <li key={violation.code}>{violation.message}</li>
+                ))}
+              </ul>
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={approvedOverride}
+                  onChange={(event) => setApprovedOverride(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-amber-400"
+                />
+                <span>I approve breaking these rules. This will be logged.</span>
+              </label>
+            </div>
+          ) : blockers.length > 0 ? (
             <ul className="space-y-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">
               {blockers.map((violation) => (
                 <li key={violation.code}>{violation.message}</li>
@@ -465,7 +592,7 @@ export function BookingDialog({
               disabled={!canSubmit}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {isSaving ? 'Booking…' : 'Book slot'}
+              {isSaving ? 'Booking…' : canOverride ? 'Approve & book' : 'Book slot'}
             </button>
           </div>
         </footer>

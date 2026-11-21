@@ -60,6 +60,16 @@ export interface SchedulingPolicy {
    */
   openBookingHours: number;
 
+  /** Max overnight fun prints a member may book per calendar month. */
+  maxOvernightPrintsPerMonth: number;
+  /** Inside this many hours before start, a free overnight slot skips the night cap. */
+  overnightOpenBookingHours: number;
+
+  /** Cancelling this close to the start charges part of the slot to the monthly budget. */
+  lateCancelHours: number;
+  /** Share of the slot length charged for a late cancellation (0.5 = half). */
+  lateCancelPenaltyRatio: number;
+
   /** Urgent work is unlimited, but must say why. */
   urgentRequiresJustification: boolean;
 
@@ -88,6 +98,8 @@ export interface UserUsage {
   workingWeekReservations: number;
   /** Daytime working-hours minutes used in the calendar month of the slot. */
   monthWorkingMinutes: number;
+  /** Overnight fun prints held in the calendar month of the slot. */
+  monthOvernightPrints: number;
 }
 
 export interface MemberProfile {
@@ -152,6 +164,10 @@ export interface BookingDecision {
   classification: SlotClassification;
   violations: RuleViolation[];
   warnings: RuleViolation[];
+  /** True when every violation is a quota an admin may knowingly approve past. */
+  overridable: boolean;
+  /** The member's usage the decision was made against, for budget previews. */
+  usage: UserUsage;
   /** Existing reservations that would be bumped if this booking proceeds. */
   preemptions: ExistingReservation[];
 }

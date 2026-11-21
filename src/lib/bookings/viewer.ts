@@ -23,6 +23,9 @@ export function buildViewerSummary(
     endsAt: new Date(row.ends_at),
     status: row.status,
     priority: row.priority,
+    createdAt: new Date(row.created_at),
+    cancelPenaltyMinutes: row.cancel_penalty_minutes ?? 0,
+    overrunPenaltyMinutes: row.overrun_penalty_minutes ?? 0,
   }));
 
   const usage = computeUsage(usageReservations, {
@@ -32,10 +35,8 @@ export function buildViewerSummary(
     policy,
   });
 
-  const monthRemaining = Math.max(
-    policy.monthlyWorkingMinutesCap - usage.monthWorkingMinutes,
-    0,
-  );
+  // May go negative when penalties exceed the budget; the deficit carries into next month.
+  const monthRemaining = policy.monthlyWorkingMinutesCap - usage.monthWorkingMinutes;
 
   return {
     id: profile.id,
@@ -44,13 +45,20 @@ export function buildViewerSummary(
     phone: profile.phone,
     role: profile.role,
     isBlocked: profile.is_blocked,
-    monthlyBudgetLabel: `${formatMinutes(monthRemaining)} of daytime budget left`,
+    budget: {
+      usedMinutes: usage.monthWorkingMinutes,
+      capMinutes: policy.monthlyWorkingMinutesCap,
+      remainingMinutes: monthRemaining,
+      nightsUsed: usage.monthOvernightPrints,
+      nightsCap: policy.maxOvernightPrintsPerMonth,
+    },
     quotaExplanation:
       `Daytime fun prints this working week: ${usage.workingWeekReservations}/${policy.maxPrintsPerWorkingWeek} · ` +
       `working hours used this month on fun prints: ${formatMinutes(usage.monthWorkingMinutes)} of ${formatMinutes(
         policy.monthlyWorkingMinutesCap,
-      )} · open bookings: ${usage.activeReservations}/${policy.maxActiveReservations}. ` +
-      `Work and urgent prints are unlimited and never count towards these quotas. Nights and weekends do not count, and any free slot inside ${policy.openBookingHours}h is always yours to take.`,
+      )} · overnight fun prints this month: ${usage.monthOvernightPrints}/${policy.maxOvernightPrintsPerMonth} · open bookings: ${usage.activeReservations}/${policy.maxActiveReservations}. ` +
+      `Work and urgent prints are unlimited and never count towards these quotas. Weekends do not count, any free slot inside ${policy.openBookingHours}h is always yours to take, and a free night slot inside ${policy.overnightOpenBookingHours}h skips the night limit. ` +
+      `Cancelling a fun print within ${policy.lateCancelHours}h of its start costs ${Math.round(policy.lateCancelPenaltyRatio * 100)}% of its length from your monthly budget, and a print that has started cannot be cancelled.`,
   };
 }
 

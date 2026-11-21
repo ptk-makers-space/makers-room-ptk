@@ -170,13 +170,15 @@ export async function setMemberBlocked(
 }
 
 /**
- * Move a booking to another time or printer. Admins bypass the member quotas,
- * but never double-booking or the configured gap between prints.
+ * Move a booking to another time or printer. Admins may break the owner's
+ * quotas once they approve the warning, but never double-booking or the
+ * configured gap between prints.
  */
 export async function rescheduleReservation(
   session: SessionContext,
   reservationId: string,
   input: RescheduleInput,
+  overriddenRules: string[] = [],
 ): Promise<Result> {
   const admin = createAdminClient();
 
@@ -260,6 +262,7 @@ export async function rescheduleReservation(
       new_printer_id: input.printerId,
       new_starts_at: startsAt.toISOString(),
       new_ends_at: endsAt.toISOString(),
+      ...(overriddenRules.length > 0 && { overridden_rules: overriddenRules }),
     },
   });
 

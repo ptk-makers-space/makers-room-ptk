@@ -44,8 +44,14 @@ export interface ViewerSummary {
   phone: string | null;
   role: 'member' | 'admin';
   isBlocked: boolean;
-  /** Short badge text, e.g. "6h 30m of daytime budget left". */
-  monthlyBudgetLabel: string;
+  /** Current month's fun-print budget, shown next to the member's name. */
+  budget: {
+    usedMinutes: number;
+    capMinutes: number;
+    remainingMinutes: number;
+    nightsUsed: number;
+    nightsCap: number;
+  };
   /** Full quota breakdown shown as a tooltip and on the summary pages. */
   quotaExplanation: string;
 }

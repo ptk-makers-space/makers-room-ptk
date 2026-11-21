@@ -167,6 +167,25 @@ export default async function RulesPage() {
         </p>
       </Rule>
 
+      <Rule title="מכסת הדפסות לילה">
+        <p>
+          בכל חודש קלנדרי אפשר להזמין עד {policy.maxOvernightPrintsPerMonth} הדפסות לילה
+          להנאה. משבצת לילה שעדיין פנויה {policy.overnightOpenBookingHours} שעות או פחות
+          לפני תחילתה פתוחה לכולם ללא הגבלה, ולא נספרת במכסה.
+        </p>
+      </Rule>
+
+      <Rule title="ביטול הזמנה">
+        <p>
+          אי אפשר לבטל הדפסה שכבר התחילה. אם הדפסה נכשלה, פנו למנהל.
+        </p>
+        <p className="mt-2">
+          ביטול הדפסה להנאה {policy.lateCancelHours} שעות או פחות לפני תחילתה יורד
+          מהמכסה החודשית: {Math.round(policy.lateCancelPenaltyRatio * 100)}% מאורך
+          המשבצת נספרים כאילו הודפסו.
+        </p>
+      </Rule>
+
       <Rule title="פרטי קשר">
         <p>
           לכל חבר שמורים כתובת מייל ומספר טלפון. הם גלויים לחברים מחוברים אחרים, כדי

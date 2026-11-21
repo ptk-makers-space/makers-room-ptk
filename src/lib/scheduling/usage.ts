@@ -1,4 +1,5 @@
 import {
+  overnightMinutes,
   startsInWorkingDaytime,
   workingDaytimeMinutes,
   zonedStartOfMonth,
@@ -18,6 +19,11 @@ export interface UsageReservation {
   endsAt: Date;
   status: ReservationStatus;
   priority: PrintPriority;
+  createdAt?: Date;
+  /** Minutes charged for cancelling late; only set on cancelled rows. */
+  cancelPenaltyMinutes?: number;
+  /** Minutes charged because this print overran into the next booking. */
+  overrunPenaltyMinutes?: number;
 }
 
 /** Statuses that count towards a member's usage. */
@@ -90,6 +96,70 @@ function monthWorkingMinutes(
   }, 0);
 }
 
+/** Late-cancellation and overrun penalties charged to the month containing `slotStart`. */
+function monthPenaltyMinutes(
+  reservations: UsageReservation[],
+  slotStart: Date,
+  policy: SchedulingPolicy,
+): number {
+  const monthStart = zonedStartOfMonth(slotStart, policy.timeZone).getTime();
+  const monthEnd = zonedStartOfNextMonth(slotStart, policy.timeZone).getTime();
+
+  return reservations.reduce((sum, reservation) => {
+    const start = reservation.startsAt.getTime();
+    if (start < monthStart || start >= monthEnd) return sum;
+    const cancel = reservation.status === 'cancelled' ? (reservation.cancelPenaltyMinutes ?? 0) : 0;
+    return sum + cancel + (reservation.overrunPenaltyMinutes ?? 0);
+  }, 0);
+}
+
+/**
+ * Budget the member went into minus last month because of penalties. Only the
+ * penalty-driven part carries over, so legitimate open-slot use never does.
+ */
+function carriedDeficitMinutes(
+  quotaRelevant: UsageReservation[],
+  all: UsageReservation[],
+  slotStart: Date,
+  policy: SchedulingPolicy,
+): number {
+  const lastMonth = new Date(zonedStartOfMonth(slotStart, policy.timeZone).getTime() - DAY_MS);
+  const penalties = monthPenaltyMinutes(all, lastMonth, policy);
+  if (penalties === 0) return 0;
+  const used = monthWorkingMinutes(quotaRelevant, lastMonth, policy) + penalties;
+  return Math.min(penalties, Math.max(0, used - policy.monthlyWorkingMinutesCap));
+}
+
+/**
+ * Overnight prints starting in the month containing `slotStart`. Ones booked
+ * inside the overnight open window were free and are not counted.
+ */
+function monthOvernightPrints(
+  reservations: UsageReservation[],
+  slotStart: Date,
+  policy: SchedulingPolicy,
+): number {
+  const monthStart = zonedStartOfMonth(slotStart, policy.timeZone).getTime();
+  const monthEnd = zonedStartOfNextMonth(slotStart, policy.timeZone).getTime();
+  const openMs = policy.overnightOpenBookingHours * 60 * 60 * 1000;
+
+  return reservations.filter((reservation) => {
+    const start = reservation.startsAt.getTime();
+    if (start < monthStart || start >= monthEnd) return false;
+    if (reservation.createdAt && start - reservation.createdAt.getTime() <= openMs) return false;
+
+    const total = (reservation.endsAt.getTime() - start) / 60_000;
+    if (total <= 0) return false;
+    const night = overnightMinutes(
+      { start: reservation.startsAt, end: reservation.endsAt },
+      policy.overnightStartHour,
+      policy.overnightEndHour,
+      policy.timeZone,
+    );
+    return night / total >= policy.overnightCoverageRatio;
+  }).length;
+}
+
 /**
  * Turn a member's reservation history into the aggregates the rules engine
  * needs. `slotStart` is the start of the booking being evaluated.
@@ -121,6 +191,10 @@ export function computeUsage(
         r.endsAt.getTime() > now.getTime(),
     ).length,
     workingWeekReservations: workingWeekReservations(quotaRelevant, slotStart, policy),
-    monthWorkingMinutes: monthWorkingMinutes(quotaRelevant, slotStart, policy),
+    monthWorkingMinutes:
+      monthWorkingMinutes(quotaRelevant, slotStart, policy) +
+      monthPenaltyMinutes(reservations, slotStart, policy) +
+      carriedDeficitMinutes(quotaRelevant, reservations, slotStart, policy),
+    monthOvernightPrints: monthOvernightPrints(quotaRelevant, slotStart, policy),
   };
 }
