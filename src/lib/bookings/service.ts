@@ -463,11 +463,74 @@ export async function cancelReservation(
 
 const PREVIOUS_PRINT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+type AdminClient = ReturnType<typeof createAdminClient>;
+type PreviousPrint = { id: string; ends_at: string; overrun_penalty_minutes: number; ownerName: string };
+
+/** Another member's print that ran right before `reservation` on the same printer. */
+async function findPreviousPrint(
+  admin: AdminClient,
+  reservation: { id: string; user_id: string; printer_id: string; starts_at: string },
+): Promise<{ ok: true; previous: PreviousPrint } | { ok: false; message: string }> {
+  const start = new Date(reservation.starts_at).getTime();
+  const { data, error } = await admin
+    .from('reservations')
+    .select('id, user_id, ends_at, overrun_penalty_minutes, profile:profiles!reservations_user_id_fkey(full_name, email)')
+    .eq('printer_id', reservation.printer_id)
+    .in('status', ['scheduled', 'in_progress', 'completed'])
+    .neq('id', reservation.id)
+    .lte('ends_at', reservation.starts_at)
+    .gt('ends_at', new Date(start - PREVIOUS_PRINT_WINDOW_MS).toISOString())
+    .order('ends_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return { ok: false, message: error.message };
+  if (!data) {
+    return { ok: false, message: 'There was no print before yours on this printer to blame.' };
+  }
+  if (data.user_id === reservation.user_id) {
+    return { ok: false, message: 'The print before this one was your own.' };
+  }
+  const profile = data.profile as unknown as { full_name: string | null; email: string } | null;
+  return {
+    ok: true,
+    previous: {
+      id: data.id,
+      ends_at: data.ends_at,
+      overrun_penalty_minutes: data.overrun_penalty_minutes ?? 0,
+      ownerName: profile?.full_name || profile?.email || 'the previous member',
+    },
+  };
+}
+
+/** Charge the previous print's owner for the time their overrun cost the next member. */
+async function chargeOverrun(
+  admin: AdminClient,
+  previous: PreviousPrint,
+  delayedReservationId: string,
+  actorId: string,
+  minutes: number,
+): Promise<string | null> {
+  const { error } = await admin
+    .from('reservations')
+    .update({ overrun_penalty_minutes: previous.overrun_penalty_minutes + minutes })
+    .eq('id', previous.id);
+  if (error) return error.message;
+
+  await admin.from('reservation_events').insert({
+    reservation_id: previous.id,
+    actor_id: actorId,
+    event_type: 'overran',
+    payload: { delayed_reservation_id: delayedReservationId, penalty_minutes: minutes },
+  });
+  return null;
+}
+
 /**
  * The owner of a running print reports it started late because the previous
- * print on the printer had not finished. Their slot shifts by the delay (it
- * cannot grow), and the delay is charged to the previous print's owner, whose
- * budget may go negative and carry into next month.
+ * print on the printer had not finished. They pick the real start and a new
+ * end; running longer than booked must still be free and within quota. The
+ * delay is charged to the previous print's owner, whose budget may go negative
+ * and carry into next month.
  */
 export async function reportLateStart(
   session: SessionContext,
@@ -482,7 +545,7 @@ export async function reportLateStart(
 
   const { data: existing, error: loadError } = await admin
     .from('reservations')
-    .select('id, user_id, printer_id, status, starts_at, ends_at')
+    .select('id, user_id, printer_id, status, starts_at, ends_at, title, notes, priority, justification, allows_joiners')
     .eq('id', reservationId)
     .maybeSingle();
   if (loadError) return { ok: false, message: loadError.message };
@@ -512,8 +575,8 @@ export async function reportLateStart(
     return { ok: false, message: 'The actual start cannot be in the future.' };
   }
   const delayMs = newStart - oldStart;
-  if (newEnd > oldEnd + delayMs) {
-    return { ok: false, message: 'A late start can shift your print, but not make it longer.' };
+  if (newEnd <= now.getTime()) {
+    return { ok: false, message: 'The new end must be in the future.' };
   }
 
   const { count: alreadyReported } = await admin
@@ -525,23 +588,30 @@ export async function reportLateStart(
     return { ok: false, message: 'A late start was already reported for this print.' };
   }
 
-  const { data: previous, error: previousError } = await admin
-    .from('reservations')
-    .select('id, user_id, overrun_penalty_minutes, profile:profiles!reservations_user_id_fkey(full_name, email)')
-    .eq('printer_id', existing.printer_id)
-    .in('status', ['scheduled', 'in_progress', 'completed'])
-    .neq('id', reservationId)
-    .lte('ends_at', existing.starts_at)
-    .gt('ends_at', new Date(oldStart - PREVIOUS_PRINT_WINDOW_MS).toISOString())
-    .order('ends_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (previousError) return { ok: false, message: previousError.message };
-  if (!previous) {
-    return { ok: false, message: 'There was no print before yours on this printer to blame.' };
-  }
-  if (previous.user_id === session.userId) {
-    return { ok: false, message: 'The print before this one was your own.' };
+  const found = await findPreviousPrint(admin, existing);
+  if (!found.ok) return found;
+  const { previous } = found;
+
+  // Running longer than booked takes extra machine time, so it must be free and within quota.
+  if (newEnd - newStart > oldEnd - oldStart) {
+    const { decision } = await evaluateRequest(
+      await createClient(),
+      session,
+      {
+        printerId: existing.printer_id,
+        title: existing.title,
+        notes: existing.notes,
+        priority: existing.priority,
+        startsAt: new Date(newStart).toISOString(),
+        endsAt: new Date(newEnd).toISOString(),
+        justification: existing.justification,
+        allowsJoiners: existing.allows_joiners,
+        reservationId,
+      },
+      now,
+    );
+    const blocking = decision.violations.filter((violation) => violation.code !== 'in_the_past');
+    if (blocking.length > 0) return { ok: false, message: blocking[0].message };
   }
 
   const { error: updateError } = await admin
@@ -554,46 +624,106 @@ export async function reportLateStart(
       ok: false,
       message:
         updateError.code === '23P01'
-          ? 'That end time clashes with the next booking. Pick an earlier end.'
+          ? 'That time clashes with the next booking. Pick an earlier end, or cancel your print without a penalty.'
           : updateError.message,
     };
   }
 
   const delayMinutes = Math.round(delayMs / 60_000);
-  const { error: penaltyError } = await admin
+  const chargeError = await chargeOverrun(admin, previous, reservationId, session.userId, delayMinutes);
+  if (chargeError) return { ok: false, message: chargeError };
+
+  await admin.from('reservation_events').insert({
+    reservation_id: reservationId,
+    actor_id: session.userId,
+    event_type: 'late_start',
+    payload: {
+      blamed_reservation_id: previous.id,
+      delay_minutes: delayMinutes,
+      old_starts_at: existing.starts_at,
+      old_ends_at: existing.ends_at,
+      new_starts_at: new Date(newStart).toISOString(),
+      new_ends_at: new Date(newEnd).toISOString(),
+    },
+  });
+
+  return { ok: true, delayMinutes, blamedOwnerName: previous.ownerName };
+}
+
+/**
+ * Cancel without a penalty because the previous print overran into this slot.
+ * Allowed once the previous print's booked time is over, even after this
+ * print's own start. The previous owner is charged the time lost so far.
+ */
+export async function cancelForOverrun(
+  session: SessionContext,
+  reservationId: string,
+  now: Date = new Date(),
+): Promise<
+  | { ok: true; chargedMinutes: number; blamedOwnerName: string }
+  | { ok: false; message: string }
+> {
+  const admin = createAdminClient();
+
+  const { data: existing, error: loadError } = await admin
     .from('reservations')
-    .update({ overrun_penalty_minutes: (previous.overrun_penalty_minutes ?? 0) + delayMinutes })
-    .eq('id', previous.id);
-  if (penaltyError) return { ok: false, message: penaltyError.message };
+    .select('id, user_id, printer_id, status, starts_at, ends_at')
+    .eq('id', reservationId)
+    .maybeSingle();
+  if (loadError) return { ok: false, message: loadError.message };
+  if (!existing) return { ok: false, message: 'That booking no longer exists.' };
+  if (existing.user_id !== session.userId) {
+    return { ok: false, message: 'You can only cancel your own bookings.' };
+  }
+  if (existing.status !== 'scheduled' && existing.status !== 'in_progress') {
+    return { ok: false, message: 'Only an upcoming or running print can be cancelled.' };
+  }
+  const start = new Date(existing.starts_at).getTime();
+  const end = new Date(existing.ends_at).getTime();
+  if (end <= now.getTime()) return { ok: false, message: 'This print has already finished.' };
 
-  await admin.from('reservation_events').insert([
-    {
-      reservation_id: reservationId,
-      actor_id: session.userId,
-      event_type: 'late_start',
-      payload: {
-        blamed_reservation_id: previous.id,
-        delay_minutes: delayMinutes,
-        old_starts_at: existing.starts_at,
-        old_ends_at: existing.ends_at,
-        new_starts_at: new Date(newStart).toISOString(),
-        new_ends_at: new Date(newEnd).toISOString(),
-      },
-    },
-    {
-      reservation_id: previous.id,
-      actor_id: session.userId,
-      event_type: 'overran',
-      payload: { delayed_reservation_id: reservationId, penalty_minutes: delayMinutes },
-    },
-  ]);
+  const { count: alreadyReported } = await admin
+    .from('reservation_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('reservation_id', reservationId)
+    .eq('event_type', 'late_start');
+  if (alreadyReported && alreadyReported > 0) {
+    return { ok: false, message: 'You already shifted this print for a late start.' };
+  }
 
-  const profile = previous.profile as unknown as { full_name: string | null; email: string } | null;
-  return {
-    ok: true,
-    delayMinutes,
-    blamedOwnerName: profile?.full_name || profile?.email || 'the previous member',
-  };
+  const found = await findPreviousPrint(admin, existing);
+  if (!found.ok) return found;
+  const { previous } = found;
+  if (new Date(previous.ends_at).getTime() > now.getTime()) {
+    return { ok: false, message: 'The previous print is still within its booked time.' };
+  }
+
+  const { error: updateError } = await admin
+    .from('reservations')
+    .update({ status: 'cancelled', cancelled_at: now.toISOString(), cancel_penalty_minutes: 0 })
+    .eq('id', reservationId)
+    .in('status', ['scheduled', 'in_progress']);
+  if (updateError) return { ok: false, message: updateError.message };
+
+  const chargedMinutes = Math.max(0, Math.round((Math.min(now.getTime(), end) - start) / 60_000));
+  if (chargedMinutes > 0) {
+    const chargeError = await chargeOverrun(admin, previous, reservationId, session.userId, chargedMinutes);
+    if (chargeError) return { ok: false, message: chargeError };
+  }
+
+  await admin.from('reservation_events').insert({
+    reservation_id: reservationId,
+    actor_id: session.userId,
+    event_type: 'cancelled',
+    payload: {
+      by_admin: false,
+      penalty_minutes: 0,
+      reason: 'previous_overran',
+      blamed_reservation_id: previous.id,
+    },
+  });
+
+  return { ok: true, chargedMinutes, blamedOwnerName: previous.ownerName };
 }
 
 /**

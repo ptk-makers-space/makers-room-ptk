@@ -5,6 +5,7 @@ import { rescheduleInputSchema } from '@/lib/bookings/schemas';
 import {
   adminRescheduleQuotaWarnings,
   cancelReservation,
+  cancelForOverrun,
   checkOwnReschedule,
   getSessionContext,
 } from '@/lib/bookings/service';
@@ -54,7 +55,7 @@ export async function PATCH(
 
 /** Cancel a booking, freeing the slot for anyone else to claim. */
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await getSessionContext();
@@ -63,6 +64,12 @@ export async function DELETE(
   }
 
   const { id } = await params;
+  if (new URL(request.url).searchParams.get('reason') === 'previous_overran') {
+    const overrun = await cancelForOverrun(session, id);
+    if (!overrun.ok) return NextResponse.json({ error: overrun.message }, { status: 400 });
+    return NextResponse.json({ ...overrun, penaltyMinutes: 0 });
+  }
+
   const result = await cancelReservation(session, id);
 
   if (!result.ok) {
