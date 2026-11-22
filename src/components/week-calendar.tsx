@@ -603,10 +603,11 @@ function ReservationSheet({
       : reservation.userId === viewer.id &&
         reservation.status === 'scheduled' &&
         startsAtMs > Date.now();
+  // Shown from shortly before the start, when an overrunning print may block this one.
   const canReportLate =
     reservation.userId === viewer.id &&
     (reservation.status === 'scheduled' || reservation.status === 'in_progress') &&
-    startsAtMs <= Date.now() &&
+    startsAtMs - Date.now() <= policy.lateCancelHours * 60 * 60 * 1000 &&
     new Date(reservation.endsAt).getTime() > Date.now();
   const [isReportingLate, setIsReportingLate] = useState(false);
   const [lateNotice, setLateNotice] = useState<string | null>(null);
@@ -745,6 +746,7 @@ function ReservationSheet({
 
         {isReportingLate ? (
           <LateStartForm
+            onCancelled={onCancelled}
             reservation={reservation}
             policy={policy}
             onCancel={() => setIsReportingLate(false)}
@@ -813,7 +815,7 @@ function ReservationSheet({
               }}
               className="rounded-lg border border-amber-300 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50"
             >
-              Started late?
+              Previous print overran?
             </button>
           ) : null}
           {canChangeTime && !isEditing && !moved ? (
@@ -881,28 +883,34 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 /**
- * Shift a running print that started late because the previous print overran.
- * The print keeps its length; the delay is charged to the previous owner.
+ * The previous print overran into this slot: shift to the real start with any
+ * end time (longer only if free), or cancel without a penalty. Either way the
+ * lost time is charged to the previous owner.
  */
 function LateStartForm({
   reservation,
   policy,
   onCancel,
   onSaved,
+  onCancelled,
 }: {
   reservation: CalendarReservation;
   policy: SchedulingPolicy;
   onCancel: () => void;
   onSaved: (notice: string) => void;
+  onCancelled: () => void;
 }) {
   const timeZone = policy.timeZone;
   const bookedStart = new Date(reservation.startsAt);
   const bookedEnd = new Date(reservation.endsAt);
+  const hasStarted = bookedStart.getTime() <= Date.now();
   const stepMs = policy.slotGranularityMinutes * 60_000;
   const nowRounded = new Date(Math.floor(Date.now() / stepMs) * stepMs);
 
   const [startDate, setStartDate] = useState(toDateKey(nowRounded, timeZone));
   const [startTime, setStartTime] = useState(formatTime(nowRounded, timeZone));
+  /** Null until the member picks an end; until then it follows the start. */
+  const [endOverride, setEndOverride] = useState<{ date: string; time: string } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -911,12 +919,22 @@ function LateStartForm({
   const delayMinutes = actualStart
     ? Math.round((actualStart.getTime() - bookedStart.getTime()) / 60_000)
     : 0;
-  const newEnd = new Date(bookedEnd.getTime() + Math.max(delayMinutes, 0) * 60_000);
+  const shiftedEnd = new Date(bookedEnd.getTime() + Math.max(delayMinutes, 0) * 60_000);
+  const newEnd = endOverride ? toInstant(endOverride.date, endOverride.time, timeZone) : shiftedEnd;
+  const endDate = endOverride?.date ?? toDateKey(shiftedEnd, timeZone);
+  const endTime = endOverride?.time ?? formatTime(shiftedEnd, timeZone);
+  const bookedMinutes = (bookedEnd.getTime() - bookedStart.getTime()) / 60_000;
+  const newMinutes =
+    actualStart && newEnd ? (newEnd.getTime() - actualStart.getTime()) / 60_000 : 0;
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (!actualStart || delayMinutes <= 0) {
       setError('The actual start must be later than the booked start.');
+      return;
+    }
+    if (!newEnd || newMinutes <= 0) {
+      setError('The end must be after the start.');
       return;
     }
     setIsSaving(true);
@@ -948,31 +966,73 @@ function LateStartForm({
     }
   }
 
+  async function cancelWithoutPenalty() {
+    setIsSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/reservations/${reservation.id}?reason=previous_overran`,
+        { method: 'DELETE' },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(body.error ?? 'Could not cancel that print.');
+        return;
+      }
+      onCancelled();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Network error.');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   const inputClass =
     'w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-900';
+  const step = policy.slotGranularityMinutes * 60;
 
   return (
     <form onSubmit={save} className="mt-4 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
       <p className="text-xs text-slate-600">
-        If the previous print on this printer had not finished, enter when yours actually
-        started. Your slot moves by the delay and keeps its length; the delay is taken off
-        the previous member&apos;s budget.
+        {hasStarted
+          ? 'If the previous print had not finished, enter when yours actually started and when it should end. Shorter is always fine; longer only if the printer is free. '
+          : 'If the previous print is still running into your slot, '}
+        You can also cancel without a penalty. The lost time is taken off the previous
+        member&apos;s budget.
       </p>
-      <div className="grid grid-cols-2 gap-2">
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-slate-600">Actually started</span>
-          <input type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-transparent">time</span>
-          <input type="time" required step={policy.slotGranularityMinutes * 60} value={startTime} onChange={(e) => setStartTime(e.target.value)} className={inputClass} />
-        </label>
-      </div>
-      <p className="text-sm text-slate-700">
-        {delayMinutes > 0
-          ? `Delay: ${formatMinutes(delayMinutes)} · new end ${formatTime(newEnd, timeZone)}`
-          : 'Pick a time after the booked start.'}
-      </p>
+      {hasStarted ? (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-600">Actually started</span>
+              <input type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-transparent">time</span>
+              <input type="time" required step={step} value={startTime} onChange={(e) => setStartTime(e.target.value)} className={inputClass} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-slate-600">Ends</span>
+              <input type="date" required value={endDate} onChange={(e) => setEndOverride({ date: e.target.value, time: endTime })} className={inputClass} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-transparent">time</span>
+              <input type="time" required step={step} value={endTime} onChange={(e) => setEndOverride({ date: endDate, time: e.target.value })} className={inputClass} />
+            </label>
+          </div>
+          <p className="text-sm text-slate-700">
+            {delayMinutes > 0
+              ? `Delay: ${formatMinutes(delayMinutes)} · length ${formatMinutes(newMinutes)}${
+                  newMinutes > bookedMinutes
+                    ? ` (+${formatMinutes(newMinutes - bookedMinutes)}, must be free)`
+                    : newMinutes < bookedMinutes
+                      ? ` (${formatMinutes(bookedMinutes - newMinutes)} shorter)`
+                      : ''
+                }`
+              : 'Pick a start after the booked start.'}
+          </p>
+        </>
+      ) : null}
       <label className="flex items-start gap-2 text-sm text-slate-800">
         <input
           type="checkbox"
@@ -980,14 +1040,14 @@ function LateStartForm({
           onChange={(event) => setConfirmed(event.target.checked)}
           className="mt-0.5 h-4 w-4 rounded border-slate-300"
         />
-        <span>I confirm my print started late because the previous print had not finished.</span>
+        <span>I confirm the previous print on this printer did not finish on time.</span>
       </label>
       {error ? (
         <p role="alert" className="rounded-lg bg-rose-50 p-2 text-sm text-rose-700">
           {error}
         </p>
       ) : null}
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
@@ -996,12 +1056,22 @@ function LateStartForm({
           Back
         </button>
         <button
-          type="submit"
-          disabled={isSaving || !confirmed || delayMinutes <= 0}
-          className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          type="button"
+          onClick={cancelWithoutPenalty}
+          disabled={isSaving || !confirmed}
+          className="rounded-lg border border-rose-200 px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
         >
-          {isSaving ? 'Saving…' : 'Approve & shift my print'}
+          Cancel my print, no penalty
         </button>
+        {hasStarted ? (
+          <button
+            type="submit"
+            disabled={isSaving || !confirmed || delayMinutes <= 0 || newMinutes <= 0}
+            className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {isSaving ? 'Saving…' : 'Approve new time'}
+          </button>
+        ) : null}
       </div>
     </form>
   );
